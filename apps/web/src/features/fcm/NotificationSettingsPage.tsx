@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { getServiceWorkerStatus, showLocalNotification, startFcmTest } from './fcmService'
 import { navigateTo, routes } from '../navigation/routes'
+import { registerDeviceToken } from '../devices/deviceRegistration'
 
 type SetupState = 'idle' | 'requesting' | 'ready' | 'error'
 
-export function NotificationSettingsPage() {
+type NotificationSettingsPageProps = { userId: string }
+
+export function NotificationSettingsPage({ userId }: NotificationSettingsPageProps) {
   const [state, setState] = useState<SetupState>('idle')
   const [message, setMessage] = useState('')
   const [permission, setPermission] = useState<NotificationPermission>(Notification.permission)
@@ -21,6 +24,7 @@ export function NotificationSettingsPage() {
     try {
       stopListeningRef.current?.()
       const result = await startFcmTest((receivedMessage) => setMessage(`Notification received: ${receivedMessage}`))
+      await registerDeviceToken(userId, result.token, 'web', { deviceName: navigator.userAgent.slice(0, 120) })
       stopListeningRef.current = result.stopListening
       await getServiceWorkerStatus()
       setPermission(Notification.permission)

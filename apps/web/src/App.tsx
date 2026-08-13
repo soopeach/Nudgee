@@ -8,9 +8,9 @@ import { useAuth } from './features/auth/useAuth'
 function App() {
   const route = useRoute()
   const { user, isLoading, error, signIn, signOut } = useAuth()
-  if (route === routes.notificationSettings) return <NotificationSettingsPage />
   if (isLoading) return <main className="app-shell"><p className="loading-message">Loading Nudgee…</p></main>
   if (!user) return <LoginScreen error={error} onSignIn={signIn} />
+  if (route === routes.notificationSettings) return <NotificationSettingsPage userId={user.id} />
 
   return <TodoPage user={user} onSignOut={signOut} />
 }
