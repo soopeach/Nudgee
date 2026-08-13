@@ -3,4 +3,5 @@ export type AuthenticatedUser = {
   displayName: string
   email: string
   photoURL: string | null
+  isNewUser: boolean
 }

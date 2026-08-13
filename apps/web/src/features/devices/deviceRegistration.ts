@@ -15,7 +15,9 @@ function detectPlatform(): DevicePlatform {
 async function getWebToken(): Promise<string | null> {
   if (!isFirebaseConfigured || !vapidKey || !('Notification' in window) || !('serviceWorker' in navigator)) return null
   if (Notification.permission !== 'granted' || !await isSupported()) return null
-  const serviceWorkerRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
+  await navigator.serviceWorker.register('/firebase-messaging-sw.js')
+  const serviceWorkerRegistration = await navigator.serviceWorker.ready
+  if (!serviceWorkerRegistration.active) return null
   const token = await getToken(getMessaging(), { vapidKey, serviceWorkerRegistration })
   return token || null
 }

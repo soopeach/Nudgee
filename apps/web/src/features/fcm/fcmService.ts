@@ -32,7 +32,11 @@ export async function startFcmTest(onForegroundMessage: (message: string) => voi
     throw new Error('Notification permission was not granted. Allow notifications in your browser settings and try again.')
   }
 
-  const serviceWorkerRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
+  await navigator.serviceWorker.register('/firebase-messaging-sw.js')
+  const serviceWorkerRegistration = await navigator.serviceWorker.ready
+  if (!serviceWorkerRegistration.active) {
+    throw new Error('Firebase messaging service worker is not active yet. Reload the page and try again.')
+  }
   const messaging = getMessaging()
   const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration })
   if (!token) {

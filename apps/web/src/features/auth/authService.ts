@@ -1,9 +1,12 @@
 import { supabase } from '../../lib/supabase'
 import type { AuthenticatedUser } from './types'
 
-export function mapSupabaseUser(user: { id: string; user_metadata?: Record<string, unknown>; email?: string } | null): AuthenticatedUser | null {
+export function mapSupabaseUser(user: { id: string; user_metadata?: Record<string, unknown>; email?: string; created_at?: string; last_sign_in_at?: string } | null): AuthenticatedUser | null {
   if (!user) return null
-  return { id: user.id, displayName: String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? 'Nudgee user'), email: user.email ?? '', photoURL: typeof user.user_metadata?.avatar_url === 'string' ? user.user_metadata.avatar_url : null }
+  const createdAt = user.created_at ? Date.parse(user.created_at) : Number.NaN
+  const lastSignInAt = user.last_sign_in_at ? Date.parse(user.last_sign_in_at) : Number.NaN
+  const isNewUser = Number.isFinite(createdAt) && Number.isFinite(lastSignInAt) && Math.abs(lastSignInAt - createdAt) < 60_000
+  return { id: user.id, displayName: String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? 'Nudgee user'), email: user.email ?? '', photoURL: typeof user.user_metadata?.avatar_url === 'string' ? user.user_metadata.avatar_url : null, isNewUser }
 }
 
 export async function signInWithGoogle() {
