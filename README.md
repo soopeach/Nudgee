@@ -1,12 +1,12 @@
 # Nudgee
 
-Nudgee is a cross-device, notification-first todo app. This repository is a monorepo containing the React web client, shared Supabase configuration, and the future Kotlin Multiplatform client.
+Nudgee is a cross-device, notification-first todo app. This repository is a monorepo containing the React web client, shared Supabase configuration, and the Kotlin Multiplatform native client.
 
 ## Repository layout
 
 ```text
 apps/web/       React + Vite web client (current project)
-apps/client/    Kotlin Multiplatform + Compose client (planned)
+apps/client/    Kotlin Multiplatform + Compose client (Android, iOS, Windows, macOS)
 supabase/       Database migrations, RLS policies, and future Edge Functions
 docs/           Product and architecture documentation (planned)
 ```
@@ -21,6 +21,10 @@ npm run dev
 The Vercel project should use `apps/web` as its Root Directory. Web environment variables belong in `apps/web/.env` locally and in Vercel project settings.
 
 Nudgee schedules notifications on the server. Clients write tasks and register push targets; they never own a local notification timer.
+
+### Native client development
+
+The Compose Multiplatform baseline lives in `apps/client`. Open that directory in Android Studio or IntelliJ IDEA and let Gradle sync the project. It includes shared Compose UI plus Android, iOS, and JVM desktop targets; platform-specific authentication, push registration, and notification adapters will be added incrementally.
 
 ## Local setup
 
