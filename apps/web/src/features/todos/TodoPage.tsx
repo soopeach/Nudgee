@@ -5,6 +5,8 @@ import { DeleteTodoDialog } from './DeleteTodoDialog'
 import { EmptyTodoState } from './EmptyTodoState'
 import { ReminderPicker } from './ReminderPicker'
 import { getNextHourInputValue, useTodos } from './useTodos'
+import { parseNaturalLanguageReminder } from './naturalLanguageService'
+import { formatLocalDateTime } from './reminderDateTime'
 import type { Todo } from './types'
 import { TaskPeriodFilter, type TaskPeriod } from './TaskPeriodFilter'
 import { filterTodosByPeriod } from './taskPeriod'
@@ -29,6 +31,9 @@ export function TodoPage({ user, onSignOut }: TodoPageProps) {
   const { todos, addTodo, toggleTodo, deleteTodo, isLoading, error: todoError } = useTodos(user.id)
   const [title, setTitle] = useState('')
   const [notifyAt, setNotifyAt] = useState(getNextHourInputValue)
+  const [naturalLanguage, setNaturalLanguage] = useState('')
+  const [isParsing, setIsParsing] = useState(false)
+  const [showManualEntry, setShowManualEntry] = useState(false)
   const [message, setMessage] = useState('')
   const [todoPendingDeletion, setTodoPendingDeletion] = useState<Todo | null>(null)
   const [period, setPeriod] = useState<TaskPeriod>('7-days')
@@ -64,6 +69,32 @@ export function TodoPage({ user, onSignOut }: TodoPageProps) {
     }
   }
 
+  async function handleNaturalLanguageSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!naturalLanguage.trim() || isParsing) return
+    setIsParsing(true)
+    setMessage('')
+    try {
+      const parsed = await parseNaturalLanguageReminder(naturalLanguage.trim())
+      setTitle(parsed.title)
+      if (parsed.notifyAt) setNotifyAt(formatLocalDateTime(new Date(parsed.notifyAt)))
+      if (parsed.needsClarification || !parsed.notifyAt) {
+        setShowManualEntry(true)
+        setMessage(parsed.clarification || 'When should Nudgee remind you? Set a date and time below.')
+        return
+      }
+      await addTodo(parsed.title, parsed.notifyAt)
+      setNaturalLanguage('')
+      setTitle('')
+      setNotifyAt(getNextHourInputValue())
+      setMessage('Task added!')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Task could not be added.')
+    } finally {
+      setIsParsing(false)
+    }
+  }
+
   async function confirmDelete() {
     if (!todoPendingDeletion) return
     try {
@@ -78,7 +109,8 @@ export function TodoPage({ user, onSignOut }: TodoPageProps) {
   return <main className="app-shell"><section className="todo-app" aria-labelledby="app-title">
     <header className="todo-header"><div><span className="eyebrow">Nudgee</span><h1 id="app-title">Your little nudges</h1><p>Pick a time, then let Nudgee remember it for you.</p></div><div className="header-actions"><button className="settings-link" onClick={() => navigateTo(routes.notificationSettings)}>Notifications</button><button className="avatar-button" title={user.displayName ?? user.email ?? 'Signed in user'}>{user.photoURL ? <img src={user.photoURL} alt="" /> : user.displayName?.slice(0, 1) ?? 'U'}</button><button className="sign-out-button" onClick={() => void onSignOut()}>Sign out</button></div></header>
     <div className="progress-card" aria-label={`${completedCount} of ${totalCount} tasks completed, ${progressPercentage}% complete`}><div className="progress-card-top"><strong>{completedCount} of {totalCount}</strong><span>{progressPercentage}%</span></div><div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercentage} aria-label="Task completion progress"><span style={{ width: `${progressPercentage}%` }} /></div><small>tasks completed</small></div>
-    <form className="add-todo-form" onSubmit={(event) => void handleSubmit(event)}><label className="title-field"><span>WHAT NEEDS DOING?</span><input value={title} onChange={(event) => { setTitle(event.target.value); setMessage('') }} placeholder="e.g. Send the meeting notes" autoFocus required /></label><ReminderPicker value={notifyAt} onChange={setNotifyAt} /><button className="add-button" type="submit" disabled={isLoading}>Add task <span>→</span></button></form>
+    <section className={`natural-reminder-card${isParsing ? ' is-parsing' : ''}`} aria-labelledby="natural-reminder-title" aria-busy={isParsing}><div className="natural-reminder-heading"><span aria-hidden="true">✦</span><div><h2 id="natural-reminder-title">Tell Nudgee naturally</h2><p>Try “Remind me to call Mum tomorrow at 9am”.</p></div></div><form className="natural-reminder-form" onSubmit={(event) => void handleNaturalLanguageSubmit(event)}><label className="sr-only" htmlFor="natural-reminder">Describe your reminder</label><input id="natural-reminder" value={naturalLanguage} onChange={(event) => { setNaturalLanguage(event.target.value); setMessage('') }} placeholder="What do you need a nudge for?" autoFocus required disabled={isParsing} /><button className="add-button" type="submit" disabled={isLoading || isParsing}>{isParsing ? 'Understanding…' : <>Add with Nudgee <span>→</span></>}</button></form>{isParsing && <div className="natural-reminder-loading" role="status" aria-live="polite"><span className="loading-spinner" aria-hidden="true" />Understanding your reminder…</div>}</section>
+    <details className="manual-reminder" open={showManualEntry} onToggle={(event) => setShowManualEntry(event.currentTarget.open)}><summary>Set the task, date and time yourself</summary><form className="add-todo-form" onSubmit={(event) => void handleSubmit(event)}><label className="title-field"><span>WHAT NEEDS DOING?</span><input value={title} onChange={(event) => { setTitle(event.target.value); setMessage('') }} placeholder="e.g. Send the meeting notes" required /></label><ReminderPicker value={notifyAt} onChange={setNotifyAt} /><button className="add-button" type="submit" disabled={isLoading}>Add task <span>→</span></button></form></details>
     {todoError && <p className="form-message error" role="alert">{todoError}</p>}
     {message && <div className="toast-message" role="status">{message}<button type="button" aria-label="Dismiss message" onClick={() => setMessage('')}>×</button></div>}
     <TaskPeriodFilter value={period} onChange={setPeriod} />
