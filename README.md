@@ -28,6 +28,17 @@ Nudgee schedules notifications on the server. Clients write tasks and register p
 2. Configure Google OAuth and the `tasks`/`device_tokens` tables in Supabase.
 3. Run `npm run dev` from the repository root.
 
+### Natural-language reminders
+
+Deploy the `parse-reminder` Supabase Edge Function and set its server-only secret before using natural-language task entry:
+
+```bash
+supabase secrets set GEMINI_API_KEY=your_gemini_api_key
+supabase functions deploy parse-reminder
+```
+
+The Gemini key must never be added to `apps/web/.env`; the browser calls the authenticated Edge Function instead.
+
 ## Deploy
 
 Deploy `apps/web` to Vercel with `apps/web` as the Root Directory. The Supabase Edge Function and scheduled trigger will provide the server-owned notification scheduler; Firebase is used only as the web FCM delivery channel.

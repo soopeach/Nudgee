@@ -1,2 +1,5 @@
 [functions.dispatch-notifications]
 verify_jwt = false
+
+[functions.parse-reminder]
+verify_jwt = true
