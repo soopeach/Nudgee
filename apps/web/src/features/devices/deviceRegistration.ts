@@ -24,16 +24,17 @@ async function getWebToken(): Promise<string | null> {
 
 export async function registerDeviceToken(userId: string, token: string, platform: DevicePlatform, metadata: { deviceName?: string; appVersion?: string } = {}) {
   if (!supabase) throw new Error('Supabase is not configured.')
-  const payload = { user_id: userId, platform, token, is_active: true, last_seen_at: new Date().toISOString(), device_name: metadata.deviceName ?? null, app_version: metadata.appVersion ?? null }
-  const { data: existing, error: lookupError } = await supabase.from('device_tokens').select('id').eq('user_id', userId).eq('platform', platform).eq('token', token).maybeSingle()
-  if (lookupError) throw lookupError
-  if (existing?.id) {
-    const { error } = await supabase.from('device_tokens').update(payload).eq('id', existing.id).eq('user_id', userId)
-    if (error) throw error
-  } else {
-    const { error } = await supabase.from('device_tokens').insert(payload)
-    if (error) throw error
-  }
+  if (!userId) throw new Error('User is not authenticated.')
+  // The RPC atomically transfers ownership when the same browser token is
+  // encountered after an account switch. Direct client writes cannot safely
+  // deactivate a previous user's row under per-user RLS.
+  const { error } = await supabase.rpc('claim_device_token', {
+    p_platform: platform,
+    p_token: token,
+    p_device_name: metadata.deviceName ?? null,
+    p_app_version: metadata.appVersion ?? null,
+  })
+  if (error) throw error
 }
 
 export async function registerCurrentDevice(userId: string) {
