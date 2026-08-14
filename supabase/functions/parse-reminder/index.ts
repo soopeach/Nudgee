@@ -14,9 +14,14 @@ function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: corsHeaders })
 }
 
-function getTextPart(body: unknown) {
-  const candidate = (body as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })?.candidates?.[0]
-  return candidate?.content?.parts?.map((part) => part.text ?? '').join('') ?? ''
+function getInteractionText(body: unknown) {
+  const steps = (body as { steps?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> })?.steps ?? []
+  return steps
+    .filter((step) => step.type === 'model_output')
+    .flatMap((step) => step.content ?? [])
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('')
 }
 
 function validateRequest(body: ParseRequest) {
@@ -58,32 +63,37 @@ Deno.serve(async (request) => {
   try {
     const input = validateRequest(await request.json() as ParseRequest)
     const prompt = `You parse reminder requests into a single task. Current instant: ${input.now}. User timezone: ${input.timezone}. User locale: ${input.locale}.\n\nReturn a concise task title and an exact future RFC 3339 timestamp with its UTC offset only when the request unambiguously specifies a reminder time. Relative dates must be resolved from the current instant in the user's timezone. If no time, date, or sufficiently precise reminder moment is specified, set notifyAt to null and needsClarification to true. Never invent a time.\n\nUser request: ${input.text}`
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`, {
+    const response = await fetch('https://generativelanguage.googleapis.com/v1/interactions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': geminiKey,
+      },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'OBJECT',
+        model: 'gemini-3.6-flash',
+        input: prompt,
+        store: false,
+        response_format: [{
+          type: 'text',
+          mime_type: 'application/json',
+          schema: {
+            type: 'object',
             properties: {
-              title: { type: 'STRING' },
-              notifyAt: { type: 'STRING', nullable: true },
-              needsClarification: { type: 'BOOLEAN' },
-              clarification: { type: 'STRING', nullable: true },
+              title: { type: 'string' },
+              notifyAt: { type: 'string', nullable: true },
+              needsClarification: { type: 'boolean' },
+              clarification: { type: 'string', nullable: true },
             },
             required: ['title', 'notifyAt', 'needsClarification', 'clarification'],
           },
-        },
+        }],
       }),
     })
     if (!response.ok) {
       console.error('Gemini request failed', response.status, (await response.text()).slice(0, 500))
       return json({ error: 'Nudgee could not parse that reminder. Please try again.' }, 502)
     }
-    const result = JSON.parse(getTextPart(await response.json())) as GeminiResult
+    const result = JSON.parse(getInteractionText(await response.json())) as GeminiResult
     return json(validateResult(result))
   } catch (caught) {
     console.error('Reminder parse failed', caught)
