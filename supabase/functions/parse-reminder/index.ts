@@ -14,6 +14,17 @@ function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: corsHeaders })
 }
 
+function getServerAuthKey() {
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (serviceRoleKey) return serviceRoleKey
+  const secretKeys = Deno.env.get('SUPABASE_SECRET_KEYS')
+  if (secretKeys) {
+    const parsed = JSON.parse(secretKeys) as Record<string, string>
+    if (parsed.default) return parsed.default
+  }
+  return null
+}
+
 function getInteractionText(body: unknown) {
   const steps = (body as { steps?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> })?.steps ?? []
   return steps
@@ -49,15 +60,17 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405)
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
+  const serverAuthKey = getServerAuthKey()
   const geminiKey = Deno.env.get('GEMINI_API_KEY')
-  if (!supabaseUrl || !anonKey) return json({ error: 'Supabase function is not configured.' }, 500)
+  if (!supabaseUrl || !serverAuthKey) return json({ error: 'Supabase function is not configured.' }, 500)
   if (!geminiKey) return json({ error: 'Natural-language reminders are not configured yet.' }, 503)
 
   const auth = request.headers.get('Authorization')
   if (!auth) return json({ error: 'Unauthorized.' }, 401)
-  const client = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: auth } } })
-  const { data: { user }, error: userError } = await client.auth.getUser()
+  const accessToken = auth.replace(/^Bearer\s+/i, '').trim()
+  if (!accessToken) return json({ error: 'Unauthorized.' }, 401)
+  const client = createClient(supabaseUrl, serverAuthKey)
+  const { data: { user }, error: userError } = await client.auth.getUser(accessToken)
   if (userError || !user) return json({ error: 'Unauthorized.' }, 401)
 
   try {
