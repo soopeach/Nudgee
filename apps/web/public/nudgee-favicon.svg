@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Nudgee">
+  <rect width="64" height="64" rx="16" fill="#9FA1FF"/>
+  <path d="M17 47V30c0-7.18 5.82-13 13-13s13 5.82 13 13v17" fill="none" stroke="#30345D" stroke-linecap="round" stroke-width="8"/>
+  <circle cx="50" cy="15" r="5" fill="#D9F9DF"/>
+</svg>
