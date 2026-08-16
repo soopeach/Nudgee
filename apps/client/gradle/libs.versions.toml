@@ -6,12 +6,20 @@ android-targetSdk = "35"
 androidx-activity = "1.10.1"
 compose-multiplatform = "1.8.2"
 kotlin = "2.1.21"
+ktor = "3.1.2"
+serialization = "1.7.3"
+supabase = "3.1.4"
+coil = "3.1.0"
+firebase-bom = "34.16.0"
+google-services = "4.5.0"
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+googleServices = { id = "com.google.gms.google-services", version.ref = "google-services" }
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }

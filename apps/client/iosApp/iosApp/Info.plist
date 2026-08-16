@@ -16,8 +16,23 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nudgee</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>SupabasePublishableKey</key>
+	<string>sb_publishable_Mx-6tZbXGcSdvldAMj_GlQ_NB8PAUJK</string>
+	<key>SupabaseUrl</key>
+	<string>https://efeenkmzvbaawsmxikli.supabase.co</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

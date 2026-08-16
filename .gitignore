@@ -18,6 +18,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .DS_Store
+apps/client/composeApp/google-services.json
 *.local
 .vercel/
 .supabase/
