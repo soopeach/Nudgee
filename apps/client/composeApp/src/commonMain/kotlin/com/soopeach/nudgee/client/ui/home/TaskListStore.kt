@@ -1,0 +1,116 @@
+package com.soopeach.nudgee.client.ui.home
+
+import com.soopeach.nudgee.client.domain.task.Task
+import com.soopeach.nudgee.client.domain.task.TaskRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+data class TaskListUiState(
+    val tasks: List<Task> = emptyList(),
+    val isLoading: Boolean = true,
+    val isSaving: Boolean = false,
+    val error: String? = null,
+)
+
+/** Keeps task I/O and Realtime collection out of Compose components. */
+class TaskListStore(
+    private val repository: TaskRepository,
+    private val scope: CoroutineScope,
+) {
+    private val _state = MutableStateFlow(TaskListUiState())
+    val state: StateFlow<TaskListUiState> = _state
+    private val _serverDispatchedTasks = MutableSharedFlow<Task>(extraBufferCapacity = 8)
+    /** Emits once when the server reaches a reminder's scheduled dispatch attempt. */
+    val serverDispatchedTasks: SharedFlow<Task> = _serverDispatchedTasks
+    private var realtimeJob: Job? = null
+
+    fun start() {
+        if (realtimeJob != null) return
+        realtimeJob = scope.launch {
+            runCatching { repository.fetchTasks() }
+                .onSuccess { tasks -> _state.update { it.copy(tasks = tasks, isLoading = false, error = null) } }
+                .onFailure { error -> _state.update { it.copy(isLoading = false, error = error.toUserMessage()) } }
+
+            var didReceiveInitialRealtimeSnapshot = false
+            var notificationStates = emptyMap<String, String>()
+            val locallyPresentedTaskIds = mutableSetOf<String>()
+            repository.observeTasks()
+                .catch { error -> _state.update { it.copy(error = error.toUserMessage()) } }
+                .collect { tasks ->
+                    if (didReceiveInitialRealtimeSnapshot) {
+                        tasks.forEach { task ->
+                            if (task.notificationState == NOTIFICATION_PENDING) {
+                                // Editing/rescheduling deliberately creates a new reminder attempt.
+                                locallyPresentedTaskIds.remove(task.id)
+                            }
+                            if (
+                                !task.completed &&
+                                task.notificationState.isTerminalDispatchState() &&
+                                notificationStates[task.id] != task.notificationState &&
+                                locallyPresentedTaskIds.add(task.id)
+                            ) {
+                                _serverDispatchedTasks.tryEmit(task)
+                            }
+                        }
+                        locallyPresentedTaskIds.retainAll(tasks.mapTo(mutableSetOf(), Task::id))
+                    }
+                    notificationStates = tasks.associate { it.id to it.notificationState }
+                    didReceiveInitialRealtimeSnapshot = true
+                    _state.update { it.copy(tasks = tasks, isLoading = false, error = null) }
+                }
+        }
+    }
+
+    fun stop() {
+        realtimeJob?.cancel()
+        realtimeJob = null
+    }
+
+    fun addTask(title: String, notifyAt: String) = mutate {
+        repository.createTask(title, notifyAt).also { created ->
+            _state.update { state -> state.copy(tasks = state.tasks.upsert(created)) }
+        }
+    }
+
+    fun toggleTask(task: Task) = mutate {
+        repository.setCompleted(task.id, !task.completed).also { updated ->
+            _state.update { state -> state.copy(tasks = state.tasks.upsert(updated)) }
+        }
+    }
+
+    fun updateTask(task: Task, title: String, notifyAt: String) = mutate {
+        repository.updateTask(task.id, title, notifyAt).also { updated ->
+            _state.update { state -> state.copy(tasks = state.tasks.upsert(updated)) }
+        }
+    }
+
+    fun deleteTask(task: Task) = mutate {
+        repository.deleteTask(task.id)
+        _state.update { state -> state.copy(tasks = state.tasks.filterNot { it.id == task.id }) }
+    }
+
+    private fun mutate(operation: suspend () -> Unit) {
+        scope.launch {
+            _state.update { it.copy(isSaving = true, error = null) }
+            runCatching { operation() }
+                .onFailure { error -> _state.update { it.copy(error = error.toUserMessage()) } }
+            _state.update { it.copy(isSaving = false) }
+        }
+    }
+}
+
+private const val NOTIFICATION_PENDING = "pending"
+
+private fun String.isTerminalDispatchState(): Boolean = this == "sent" || this == "failed"
+
+private fun List<Task>.upsert(incoming: Task): List<Task> =
+    (filterNot { it.id == incoming.id } + incoming).sortedBy(Task::notifyAt)
+
+private fun Throwable.toUserMessage(): String = message ?: "Tasks could not be updated. Please try again."

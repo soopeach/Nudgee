@@ -7,6 +7,9 @@ struct NudgeeApp: App {
         WindowGroup {
             ComposeViewController()
                 .ignoresSafeArea(.all)
+                .onOpenURL { url in
+                    IosDeeplinkHandlerKt.handleNudgeeDeeplink(url: url)
+                }
         }
     }
 }
