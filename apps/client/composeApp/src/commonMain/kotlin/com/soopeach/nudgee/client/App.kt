@@ -7,7 +7,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.data.notifications.registerPlatformPushToken
 import com.soopeach.nudgee.client.data.tasks.SupabaseTaskRepository
@@ -19,6 +20,8 @@ import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.status.SessionStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -27,8 +30,8 @@ fun App() {
     NudgeeTheme {
         val supabase = NudgeeSupabase.client
         val coroutineScope = rememberCoroutineScope()
-        var isSigningIn by remember { mutableStateOf(false) }
-        var signInMessage by remember { mutableStateOf<String?>(null) }
+        val authViewModel: AuthViewModel = viewModel { AuthViewModel() }
+        val authState by authViewModel.state.collectAsState()
         // Collecting this flow makes the composition switch to Home after the
         // platform deep-link handler exchanges the OAuth code for a session.
         val sessionStatus by supabase?.auth?.sessionStatus?.collectAsState()
@@ -39,7 +42,7 @@ fun App() {
 
         LaunchedEffect(isSignedIn) {
             if (isSignedIn) {
-                isSigningIn = false
+                authViewModel.completeSignIn()
                 registerPlatformPushToken()
             }
         }
@@ -47,19 +50,18 @@ fun App() {
         // Opening the provider browser returns before its deep link has finished exchanging the
         // authorization code. Keep the app on the transition screen instead of briefly rendering
         // Login again. The timeout gives a cancelled external flow a way back to Login.
-        LaunchedEffect(isSigningIn, isSignedIn) {
-            if (isSigningIn && !isSignedIn) {
+        LaunchedEffect(authState.isSigningIn, isSignedIn) {
+            if (authState.isSigningIn && !isSignedIn) {
                 delay(OAUTH_TRANSITION_TIMEOUT_MILLIS)
                 if (!isSignedIn) {
-                    isSigningIn = false
-                    signInMessage = "Sign-in was not completed. Please try again."
+                    authViewModel.failSignIn("Sign-in was not completed. Please try again.")
                 }
             }
         }
 
         when {
             isRestoringSession -> NudgeeStartupScreen()
-            isSigningIn -> NudgeeStartupScreen(message = "Signing you in…")
+            authState.isSigningIn -> NudgeeStartupScreen(message = "Signing you in…")
             isSignedIn -> {
             val configuredSupabase = requireNotNull(supabase)
             AuthenticatedNudgeeScreen(
@@ -75,17 +77,15 @@ fun App() {
             else -> {
             LoginScreen(
                 isConfigured = supabase != null,
-                isSigningIn = isSigningIn,
-                message = signInMessage ?: if (supabase == null) "Add the public Supabase URL and publishable key, then rebuild." else null,
+                isSigningIn = authState.isSigningIn,
+                message = authState.message ?: if (supabase == null) "Add the public Supabase URL and publishable key, then rebuild." else null,
                 onSignIn = {
                     if (supabase == null) return@LoginScreen
                     coroutineScope.launch {
-                        isSigningIn = true
-                        signInMessage = null
+                        authViewModel.beginSignIn()
                         runCatching { supabase.auth.signInWith(Google) }
                             .onFailure {
-                                isSigningIn = false
-                                signInMessage = it.message ?: "Google sign-in could not start."
+                                authViewModel.failSignIn(it.message ?: "Google sign-in could not start.")
                             }
                     }
                 },
@@ -93,6 +93,16 @@ fun App() {
             }
         }
     }
+}
+
+private data class AuthUiState(val isSigningIn: Boolean = false, val message: String? = null)
+
+private class AuthViewModel : ViewModel() {
+    private val _state = MutableStateFlow(AuthUiState())
+    val state = _state.asStateFlow()
+    fun beginSignIn() { _state.value = AuthUiState(isSigningIn = true) }
+    fun completeSignIn() { _state.value = AuthUiState() }
+    fun failSignIn(message: String) { _state.value = AuthUiState(message = message) }
 }
 
 private const val OAUTH_TRANSITION_TIMEOUT_MILLIS = 90_000L

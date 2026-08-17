@@ -1,13 +1,16 @@
 package com.soopeach.nudgee.client.ui.home
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.soopeach.nudgee.client.domain.task.Task
 import com.soopeach.nudgee.client.domain.task.TaskRepository
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -20,20 +23,23 @@ data class TaskListUiState(
 )
 
 /** Keeps task I/O and Realtime collection out of Compose components. */
-class TaskListStore(
+class TaskListViewModel(
     private val repository: TaskRepository,
-    private val scope: CoroutineScope,
-) {
+) : ViewModel() {
     private val _state = MutableStateFlow(TaskListUiState())
-    val state: StateFlow<TaskListUiState> = _state
+    val state: StateFlow<TaskListUiState> = _state.asStateFlow()
     private val _serverDispatchedTasks = MutableSharedFlow<Task>(extraBufferCapacity = 8)
     /** Emits once when the server reaches a reminder's scheduled dispatch attempt. */
-    val serverDispatchedTasks: SharedFlow<Task> = _serverDispatchedTasks
+    val serverDispatchedTasks: SharedFlow<Task> = _serverDispatchedTasks.asSharedFlow()
     private var realtimeJob: Job? = null
 
-    fun start() {
+    init {
+        start()
+    }
+
+    private fun start() {
         if (realtimeJob != null) return
-        realtimeJob = scope.launch {
+        realtimeJob = viewModelScope.launch {
             runCatching { repository.fetchTasks() }
                 .onSuccess { tasks -> _state.update { it.copy(tasks = tasks, isLoading = false, error = null) } }
                 .onFailure { error -> _state.update { it.copy(isLoading = false, error = error.toUserMessage()) } }
@@ -68,7 +74,7 @@ class TaskListStore(
         }
     }
 
-    fun stop() {
+    private fun stop() {
         realtimeJob?.cancel()
         realtimeJob = null
     }
@@ -97,12 +103,16 @@ class TaskListStore(
     }
 
     private fun mutate(operation: suspend () -> Unit) {
-        scope.launch {
+        viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             runCatching { operation() }
                 .onFailure { error -> _state.update { it.copy(error = error.toUserMessage()) } }
             _state.update { it.copy(isSaving = false) }
         }
+    }
+
+    override fun onCleared() {
+        stop()
     }
 }
 

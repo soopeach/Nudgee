@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -32,13 +31,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +54,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.soopeach.nudgee.client.NudgeeColors
 import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.domain.reminder.AuthenticationRequiredException
+import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
 import com.soopeach.nudgee.client.domain.reminder.ParsedReminderDraft
 import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
 import com.soopeach.nudgee.client.domain.task.Task
@@ -61,6 +62,7 @@ import com.soopeach.nudgee.client.domain.task.TaskRepository
 import com.soopeach.nudgee.client.ui.calendar.CalendarScreen
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButtonStyle
+import com.soopeach.nudgee.client.ui.designsystem.NudgeeDeleteConfirmationDialog
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeSegmentedControl
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextInput
@@ -89,6 +91,123 @@ private enum class TaskStatusFilter(val label: String, val completed: Boolean) {
     Completed("Completed", completed = true),
 }
 
+private data class HomeUiState(
+    val window: TaskTimeWindow = TaskTimeWindow.Today,
+    val status: TaskStatusFilter = TaskStatusFilter.ToDo,
+    val destination: NudgeeDestination = NudgeeDestination.Home,
+    val isQuickAddVisible: Boolean = false,
+    val taskPendingDeletion: Task? = null,
+)
+
+private class HomeViewModel : ViewModel() {
+    private val _state = MutableStateFlow(HomeUiState())
+    val state = _state.asStateFlow()
+    fun update(transform: (HomeUiState) -> HomeUiState) = _state.update(transform)
+}
+
+private data class QuickAddUiState(
+    val mode: ReminderInputMode = ReminderInputMode.NaturalLanguage,
+    val naturalLanguage: String = "",
+    val parsedReminder: ParsedReminderDraft? = null,
+    val parserMessage: String? = null,
+    val isUnderstanding: Boolean = false,
+    val manualTitle: String = "",
+    val manualDate: String = defaultManualDate(),
+    val manualTime: String = defaultManualTime(),
+    val manualError: String? = null,
+)
+
+/** Keeps the add-task draft alive across recompositions and owns parser work. */
+private class QuickAddViewModel(
+    private val parser: NaturalLanguageReminderParser?,
+) : ViewModel() {
+    private val _state = MutableStateFlow(QuickAddUiState())
+    val state = _state.asStateFlow()
+
+    fun selectMode(mode: ReminderInputMode) = update { it.copy(mode = mode) }
+
+    fun updateNaturalLanguage(value: String) = update {
+        it.copy(naturalLanguage = value, parserMessage = null, parsedReminder = null)
+    }
+
+    fun updateManualTitle(value: String) = update { it.copy(manualTitle = value, manualError = null) }
+    fun updateManualDate(value: String) = update { it.copy(manualDate = value, manualError = null) }
+    fun updateManualTime(value: String) = update { it.copy(manualTime = value, manualError = null) }
+    fun dismissParsedReminder() = update { it.copy(parsedReminder = null) }
+
+    fun understandReminder() {
+        val prompt = state.value.naturalLanguage.trim()
+        if (prompt.isBlank()) return
+        if (parser == null) {
+            update { it.copy(parserMessage = "Sign in with Google to let Nudgee understand a natural reminder.") }
+            return
+        }
+
+        update { it.copy(isUnderstanding = true, parserMessage = null, parsedReminder = null) }
+        viewModelScope.launch {
+            runCatching { parser.parse(prompt) }
+                .onSuccess { parsed ->
+                    update {
+                        if (parsed.needsClarification || parsed.notifyAt == null) {
+                            it.copy(parserMessage = parsed.clarification ?: "When should I remind you?")
+                        } else {
+                            it.copy(parsedReminder = parsed)
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    update {
+                        it.copy(
+                            parserMessage = when (error) {
+                                is AuthenticationRequiredException -> error.message
+                                else -> error.message ?: "Nudgee could not understand that reminder. Please try again."
+                            },
+                        )
+                    }
+                }
+            update { it.copy(isUnderstanding = false) }
+        }
+    }
+
+    fun editParsedDetails() {
+        val draft = state.value.parsedReminder ?: return
+        draft.toManualReminderDetails()
+            .onSuccess { details ->
+                update {
+                    it.copy(
+                        mode = ReminderInputMode.Manual,
+                        manualTitle = draft.title,
+                        manualDate = details.date,
+                        manualTime = details.time,
+                        manualError = null,
+                        parsedReminder = null,
+                    )
+                }
+            }
+            .onFailure { error ->
+                update {
+                    it.copy(
+                        parsedReminder = null,
+                        parserMessage = error.message ?: "Nudgee could not prepare the reminder details.",
+                    )
+                }
+            }
+    }
+
+    fun validateManualReminder(onValid: (title: String, notifyAt: String) -> Unit) {
+        val current = state.value
+        manualReminderInstant(current.manualDate, current.manualTime)
+            .onSuccess { onValid(current.manualTitle.trim(), it) }
+            .onFailure { error -> update { it.copy(manualError = error.message) } }
+    }
+
+    fun reset() {
+        _state.value = QuickAddUiState()
+    }
+
+    private fun update(transform: (QuickAddUiState) -> QuickAddUiState) = _state.update(transform)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MobileHomeScreen(
@@ -98,38 +217,32 @@ fun MobileHomeScreen(
     onSignOut: () -> Unit,
 ) {
     val supabase = NudgeeSupabase.client
-    val coroutineScope = rememberCoroutineScope()
-    val store = remember(repository) { TaskListStore(repository, coroutineScope) }
+    val store: TaskListViewModel = viewModel { TaskListViewModel(repository) }
+    val homeViewModel: HomeViewModel = viewModel { HomeViewModel() }
+    val quickAddViewModel: QuickAddViewModel = viewModel {
+        QuickAddViewModel(supabase?.let(::SupabaseEdgeFunctionReminderParser))
+    }
+    val homeState by homeViewModel.state.collectAsState()
     val taskState by store.state.collectAsState()
     val tasks = taskState.tasks
-    var selectedWindow by remember { mutableStateOf(TaskTimeWindow.Today) }
-    var selectedStatus by remember { mutableStateOf(TaskStatusFilter.ToDo) }
-    var isQuickAddVisible by remember { mutableStateOf(false) }
-    var destination by remember { mutableStateOf(NudgeeDestination.Home) }
-    var taskPendingDeletion by remember { mutableStateOf<Task?>(null) }
-
-    DisposableEffect(store) {
-        store.start()
-        onDispose { store.stop() }
-    }
 
     val todayTasks = tasks.filter(Task::isDueToday)
     val todayIncompleteCount = todayTasks.count { !it.completed }
     val todayCompletedCount = todayTasks.count { it.completed }
     val todayProgress = if (todayTasks.isEmpty()) 0f else todayCompletedCount.toFloat() / todayTasks.size
     val filteredTasks = tasks.filter { task ->
-        task.completed == selectedStatus.completed && task.isInWindow(selectedWindow)
+        task.completed == homeState.status.completed && task.isInWindow(homeState.window)
     }
 
     Scaffold(
         containerColor = NudgeeColors.softSurface,
         bottomBar = {
-            NudgeeBottomNavigation(current = destination, onNavigate = { destination = it })
+            NudgeeBottomNavigation(current = homeState.destination, onNavigate = { destination -> homeViewModel.update { it.copy(destination = destination) } })
         },
         floatingActionButton = {
-            if (destination == NudgeeDestination.Home) {
+            if (homeState.destination == NudgeeDestination.Home) {
                 FloatingActionButton(
-                    onClick = { isQuickAddVisible = true },
+                    onClick = { homeViewModel.update { it.copy(isQuickAddVisible = true) } },
                     containerColor = NudgeeColors.periwinkle,
                     contentColor = NudgeeColors.ink,
                     shape = RoundedCornerShape(18.dp),
@@ -140,7 +253,7 @@ fun MobileHomeScreen(
             }
         },
     ) { contentPadding ->
-        if (destination == NudgeeDestination.Home) LazyColumn(
+        if (homeState.destination == NudgeeDestination.Home) LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding),
@@ -160,22 +273,22 @@ fun MobileHomeScreen(
             }
             item {
                 TimeWindowSelector(
-                    selectedWindow = selectedWindow,
-                    onSelect = { selectedWindow = it },
+                    selectedWindow = homeState.window,
+                    onSelect = { window -> homeViewModel.update { it.copy(window = window) } },
                 )
             }
             item {
                 TaskStatusSelector(
-                    selectedStatus = selectedStatus,
-                    onSelect = { selectedStatus = it },
+                    selectedStatus = homeState.status,
+                    onSelect = { status -> homeViewModel.update { it.copy(status = status) } },
                 )
             }
             item {
                 Text(
-                    text = if (selectedStatus == TaskStatusFilter.ToDo) {
-                        selectedWindow.sectionTitle
+                    text = if (homeState.status == TaskStatusFilter.ToDo) {
+                        homeState.window.sectionTitle
                     } else {
-                        "Completed · ${selectedWindow.label}"
+                        "Completed · ${homeState.window.label}"
                     },
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
@@ -186,18 +299,18 @@ fun MobileHomeScreen(
             if (taskState.isLoading) {
                 item { Text("Loading your nudges…", color = NudgeeColors.mutedInk) }
             } else if (filteredTasks.isEmpty()) {
-                item { EmptyTaskState(status = selectedStatus, window = selectedWindow) }
+                item { EmptyTaskState(status = homeState.status, window = homeState.window) }
             } else item {
                 TaskListGroup(
                     tasks = filteredTasks,
                     onCheckedChange = { task, checked ->
                         if (checked != task.completed) store.toggleTask(task)
                     },
-                    onDelete = { taskPendingDeletion = it },
+                    onDelete = { task -> homeViewModel.update { it.copy(taskPendingDeletion = task) } },
                 )
             }
         } else {
-            when (destination) {
+            when (homeState.destination) {
                 NudgeeDestination.Calendar -> CalendarScreen(
                     tasks = tasks,
                     contentPadding = contentPadding,
@@ -216,36 +329,34 @@ fun MobileHomeScreen(
         }
     }
 
-    if (isQuickAddVisible) {
+    if (homeState.isQuickAddVisible) {
         QuickAddSheet(
-            parser = supabase?.let(::SupabaseEdgeFunctionReminderParser),
-            onDismiss = { isQuickAddVisible = false },
+            viewModel = quickAddViewModel,
+            onDismiss = {
+                quickAddViewModel.reset()
+                homeViewModel.update { it.copy(isQuickAddVisible = false) }
+            },
             onAdd = { title, notifyAt ->
                 store.addTask(title, notifyAt)
-                selectedStatus = TaskStatusFilter.ToDo
-                selectedWindow = taskWindowFor(notifyAt)
-                isQuickAddVisible = false
+                quickAddViewModel.reset()
+                homeViewModel.update {
+                    it.copy(
+                        status = TaskStatusFilter.ToDo,
+                        window = taskWindowFor(notifyAt),
+                        isQuickAddVisible = false,
+                    )
+                }
             },
         )
     }
 
-    taskPendingDeletion?.let { task ->
-        AlertDialog(
-            onDismissRequest = { taskPendingDeletion = null },
-            title = { Text("Delete task?") },
-            text = { Text("\"${task.title}\" will be removed from all your Nudgee devices.") },
-            dismissButton = {
-                NudgeeTextButton(label = "Keep it", onClick = { taskPendingDeletion = null })
-            },
-            confirmButton = {
-                NudgeeTextButton(
-                    label = "Delete",
-                    color = NudgeeColors.mutedInk,
-                    onClick = {
-                        store.deleteTask(task)
-                        taskPendingDeletion = null
-                    },
-                )
+    homeState.taskPendingDeletion?.let { task ->
+        NudgeeDeleteConfirmationDialog(
+            taskTitle = task.title,
+            onDismiss = { homeViewModel.update { it.copy(taskPendingDeletion = null) } },
+            onConfirm = {
+                store.deleteTask(task)
+                homeViewModel.update { it.copy(taskPendingDeletion = null) }
             },
         )
     }
@@ -510,23 +621,14 @@ private fun EmptyTaskState(status: TaskStatusFilter, window: TaskTimeWindow) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuickAddSheet(
-    parser: SupabaseEdgeFunctionReminderParser?,
+    viewModel: QuickAddViewModel,
     onDismiss: () -> Unit,
     onAdd: (String, String) -> Unit,
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    var mode by remember { mutableStateOf(ReminderInputMode.NaturalLanguage) }
-    var naturalLanguage by remember { mutableStateOf("") }
-    var parsedReminder by remember { mutableStateOf<ParsedReminderDraft?>(null) }
-    var parserMessage by remember { mutableStateOf<String?>(null) }
-    var isUnderstanding by remember { mutableStateOf(false) }
-    var manualTitle by remember { mutableStateOf("") }
-    var manualDate by remember { mutableStateOf(defaultManualDate()) }
-    var manualTime by remember { mutableStateOf(defaultManualTime()) }
-    var manualError by remember { mutableStateOf<String?>(null) }
+    val state by viewModel.state.collectAsState()
 
     ModalBottomSheet(
-        onDismissRequest = { if (!isUnderstanding) onDismiss() },
+        onDismissRequest = { if (!state.isUnderstanding) onDismiss() },
         containerColor = NudgeeColors.softSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         dragHandle = null,
@@ -555,93 +657,46 @@ private fun QuickAddSheet(
             Spacer(Modifier.height(16.dp))
             NudgeeSegmentedControl(
                 options = ReminderInputMode.entries.map(ReminderInputMode::label),
-                selectedIndex = mode.ordinal,
-                onOptionSelected = { mode = ReminderInputMode.entries[it] },
+                selectedIndex = state.mode.ordinal,
+                onOptionSelected = { viewModel.selectMode(ReminderInputMode.entries[it]) },
                 selectedColor = NudgeeColors.sky.copy(alpha = 0.45f),
             )
             Spacer(Modifier.height(16.dp))
-            when (mode) {
+            when (state.mode) {
                 ReminderInputMode.NaturalLanguage -> NaturalLanguageReminderForm(
-                    naturalLanguage = naturalLanguage,
-                    message = parserMessage,
-                    isUnderstanding = isUnderstanding,
-                    onNaturalLanguageChange = {
-                        naturalLanguage = it
-                        parserMessage = null
-                        parsedReminder = null
-                    },
-                    onUnderstand = {
-                        if (parser == null) {
-                            parserMessage = "Sign in with Google to let Nudgee understand a natural reminder."
-                        } else {
-                            coroutineScope.launch {
-                                isUnderstanding = true
-                                parserMessage = null
-                                runCatching { parser.parse(naturalLanguage) }
-                                    .onSuccess { parsed ->
-                                        if (parsed.needsClarification || parsed.notifyAt == null) {
-                                            parserMessage = parsed.clarification ?: "When should I remind you?"
-                                        } else {
-                                            parsedReminder = parsed
-                                        }
-                                    }
-                                    .onFailure { error ->
-                                        parserMessage = when (error) {
-                                            is AuthenticationRequiredException -> error.message
-                                            else -> error.message ?: "Nudgee could not understand that reminder. Please try again."
-                                        }
-                                    }
-                                isUnderstanding = false
-                            }
-                        }
-                    },
+                    naturalLanguage = state.naturalLanguage,
+                    message = state.parserMessage,
+                    isUnderstanding = state.isUnderstanding,
+                    onNaturalLanguageChange = viewModel::updateNaturalLanguage,
+                    onUnderstand = viewModel::understandReminder,
                 )
                 ReminderInputMode.Manual -> ManualReminderForm(
-                    title = manualTitle,
-                    date = manualDate,
-                    time = manualTime,
-                    error = manualError,
-                    onTitleChange = { manualTitle = it },
-                    onDateChange = { manualDate = it; manualError = null },
-                    onTimeChange = { manualTime = it; manualError = null },
-                    onAdd = {
-                        manualReminderInstant(manualDate, manualTime)
-                            .onSuccess { notifyAt -> onAdd(manualTitle.trim(), notifyAt) }
-                            .onFailure { error -> manualError = error.message }
-                    },
+                    title = state.manualTitle,
+                    date = state.manualDate,
+                    time = state.manualTime,
+                    error = state.manualError,
+                    onTitleChange = viewModel::updateManualTitle,
+                    onDateChange = viewModel::updateManualDate,
+                    onTimeChange = viewModel::updateManualTime,
+                    onAdd = { viewModel.validateManualReminder(onAdd) },
                 )
             }
         }
     }
 
-    parsedReminder?.let { draft ->
+    state.parsedReminder?.let { draft ->
         NaturalReminderConfirmationDialog(
             draft = draft,
-            onDismiss = { parsedReminder = null },
-            onEditDetails = {
-                draft.toManualReminderDetails()
-                    .onSuccess { details ->
-                        manualTitle = draft.title
-                        manualDate = details.date
-                        manualTime = details.time
-                        manualError = null
-                        mode = ReminderInputMode.Manual
-                        parsedReminder = null
-                    }
-                    .onFailure { error ->
-                        parsedReminder = null
-                        parserMessage = error.message ?: "Nudgee could not prepare the reminder details."
-                    }
-            },
+            onDismiss = viewModel::dismissParsedReminder,
+            onEditDetails = viewModel::editParsedDetails,
             onConfirm = {
                 onAdd(draft.title, requireNotNull(draft.notifyAt))
-                parsedReminder = null
             },
         )
     }
 
-    if (isUnderstanding) {
-        UnderstandingReminderDialog(prompt = naturalLanguage)
+    if (state.isUnderstanding) {
+        UnderstandingReminderDialog(prompt = state.naturalLanguage)
     }
 }
 
