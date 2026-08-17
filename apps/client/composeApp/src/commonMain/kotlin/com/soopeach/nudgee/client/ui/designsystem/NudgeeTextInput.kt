@@ -22,27 +22,29 @@ fun NudgeeTextInput(
     placeholder: String,
     modifier: Modifier = Modifier,
     minLines: Int = 1,
+    enabled: Boolean = true,
 ) {
     val shape = RoundedCornerShape(16.dp)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
         minLines = minLines,
+        enabled = enabled,
         textStyle = TextStyle(
-            color = NudgeeColors.ink,
+            color = if (enabled) NudgeeColors.ink else NudgeeColors.mutedInk,
             fontSize = MaterialTheme.typography.bodyLarge.fontSize,
         ),
         modifier = modifier
             .clip(shape)
-            .background(Color.White)
-            .border(1.dp, NudgeeColors.line, shape)
+            .background(if (enabled) Color.White else NudgeeColors.softSurface)
+            .border(1.dp, if (enabled) NudgeeColors.line else NudgeeColors.line.copy(alpha = 0.65f), shape)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         decorationBox = { innerTextField ->
             if (value.isEmpty()) {
                 Text(
                     text = placeholder,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = NudgeeColors.mutedInk,
+                    color = NudgeeColors.mutedInk.copy(alpha = if (enabled) 1f else 0.72f),
                 )
             }
             innerTextField()

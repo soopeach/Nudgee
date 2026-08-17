@@ -22,10 +22,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +33,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.soopeach.nudgee.client.NudgeeColors
+import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.data.notifications.NotificationPermissionStatus
 import com.soopeach.nudgee.client.data.notifications.platformNotificationSetupDescription
 import com.soopeach.nudgee.client.data.notifications.rememberNotificationPermissionController
@@ -43,9 +43,14 @@ import com.soopeach.nudgee.client.ui.designsystem.NudgeeButtonStyle
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeSurface
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.profile.AccountSettingsSection
-import kotlinx.datetime.TimeZone
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.datetime.TimeZone
+import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
+import com.soopeach.nudgee.client.domain.reminder.ReminderParseUsage
+import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
 
 private class SettingsViewModel : ViewModel() {
     private val _selectedCategory = MutableStateFlow<SettingsCategory?>(null)
@@ -63,6 +68,28 @@ private class NotificationSettingsViewModel : ViewModel() {
     fun refresh() { _refreshVersion.value++ }
 }
 
+private data class AiParseUsageUiState(
+    val usage: ReminderParseUsage? = null,
+    val isLoading: Boolean = false,
+)
+
+private class AiParseUsageViewModel(
+    private val parser: NaturalLanguageReminderParser?,
+) : ViewModel() {
+    private val _state = MutableStateFlow(AiParseUsageUiState())
+    val state = _state.asStateFlow()
+
+    fun refresh() {
+        val activeParser = parser ?: return
+        _state.update { it.copy(isLoading = true) }
+        viewModelScope.launch {
+            runCatching { activeParser.usage() }
+                .onSuccess { usage -> _state.update { it.copy(usage = usage, isLoading = false) } }
+                .onFailure { _state.update { it.copy(isLoading = false) } }
+        }
+    }
+}
+
 @Composable
 fun SettingsScreen(
     email: String?,
@@ -71,8 +98,16 @@ fun SettingsScreen(
     contentPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(),
 ) {
     val viewModel: SettingsViewModel = viewModel { SettingsViewModel() }
+    val aiUsageViewModel: AiParseUsageViewModel = viewModel {
+        AiParseUsageViewModel(NudgeeSupabase.client?.let(::SupabaseEdgeFunctionReminderParser))
+    }
     val selectedCategory by viewModel.selectedCategory.collectAsState()
+    val aiUsageState by aiUsageViewModel.state.collectAsState()
     val uriHandler = LocalUriHandler.current
+
+    LaunchedEffect(Unit) {
+        aiUsageViewModel.refresh()
+    }
     if (selectedCategory == SettingsCategory.Notifications) {
         NotificationSettingsScreen(
             onBack = viewModel::closeCategory,
@@ -136,6 +171,12 @@ fun SettingsScreen(
 
         item { SettingsSectionLabel("Account") }
         item { AccountSettingsSection(email = email, avatarUrl = avatarUrl, onSignOut = onSignOut) }
+        item {
+            AiReminderUsageCard(
+                usage = aiUsageState.usage,
+                isLoading = aiUsageState.isLoading,
+            )
+        }
 
         item { SettingsSectionLabel("About Nudgee") }
         item {
@@ -152,6 +193,47 @@ fun SettingsScreen(
                 onClick = { uriHandler.openUri("https://buymeacoffee.com/hsjeon584z") },
             ) {
                 Text("Buy me a coffee and help Nudgee grow.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiReminderUsageCard(
+    usage: ReminderParseUsage?,
+    isLoading: Boolean,
+) {
+    SettingsCard(title = "AI reminder allowance", accent = NudgeeColors.periwinkle) {
+        if (usage == null) {
+            Text(
+                text = if (isLoading) "Checking today’s free parses…" else "AI parse usage is unavailable right now.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = NudgeeColors.mutedInk,
+            )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used today",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = NudgeeColors.ink,
+                    )
+                    Text(
+                        "Your allowance resets at your local midnight.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NudgeeColors.mutedInk,
+                    )
+                }
+                Text(
+                    "${usage.remainingFreeParses} left",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (usage.remainingFreeParses == 0) NudgeeColors.lavender else NudgeeColors.ink,
+                )
             }
         }
     }

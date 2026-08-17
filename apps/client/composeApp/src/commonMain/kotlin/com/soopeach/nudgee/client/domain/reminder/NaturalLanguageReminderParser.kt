@@ -13,13 +13,22 @@ data class ParsedReminderDraft(
     val notifyAt: String?,
     val needsClarification: Boolean,
     val clarification: String?,
+    val remainingFreeParses: Int? = null,
+)
+
+data class ReminderParseUsage(
+    val usedFreeParses: Int,
+    val remainingFreeParses: Int,
+    val dailyFreeParseLimit: Int,
 )
 
 interface NaturalLanguageReminderParser {
     suspend fun parse(input: String): ParsedReminderDraft
+    suspend fun usage(): ReminderParseUsage
 }
 
 class AuthenticationRequiredException : IllegalStateException("Sign in with Google before using natural-language reminders.")
+class DailyParseLimitReachedException : IllegalStateException("You’ve used all 10 free reminder parses for today. Try again tomorrow.")
 
 /**
  * Calls the same protected parse-reminder Edge Function used by the web app.
@@ -40,6 +49,7 @@ class SupabaseEdgeFunctionReminderParser(
                 now = Clock.System.now().toString(),
             ),
         )
+        if (response.status.value == 429) throw DailyParseLimitReachedException()
         val parsed = response.body<ParseReminderResponse>()
         val title = parsed.title.trim()
         require(title.isNotBlank()) { "Nudgee could not find a task in that reminder." }
@@ -49,6 +59,25 @@ class SupabaseEdgeFunctionReminderParser(
             notifyAt = parsed.notifyAt,
             needsClarification = parsed.needsClarification || parsed.notifyAt == null,
             clarification = parsed.clarification,
+            remainingFreeParses = parsed.remainingFreeParses,
+        )
+    }
+
+    override suspend fun usage(): ReminderParseUsage {
+        if (supabase.auth.currentSessionOrNull() == null) throw AuthenticationRequiredException()
+
+        val response = supabase.functions.invoke(
+            function = "parse-reminder",
+            body = ParseReminderUsageRequest(
+                action = "usage",
+                timezone = TimeZone.currentSystemDefault().id,
+            ),
+        )
+        val usage = response.body<ReminderParseUsageResponse>()
+        return ReminderParseUsage(
+            usedFreeParses = usage.usedFreeParses,
+            remainingFreeParses = usage.remainingFreeParses,
+            dailyFreeParseLimit = usage.dailyFreeParseLimit,
         )
     }
 }
@@ -67,4 +96,18 @@ private data class ParseReminderResponse(
     val notifyAt: String? = null,
     val needsClarification: Boolean = false,
     val clarification: String? = null,
+    val remainingFreeParses: Int? = null,
+)
+
+@Serializable
+private data class ParseReminderUsageRequest(
+    val action: String,
+    val timezone: String,
+)
+
+@Serializable
+private data class ReminderParseUsageResponse(
+    val usedFreeParses: Int,
+    val remainingFreeParses: Int,
+    val dailyFreeParseLimit: Int,
 )
