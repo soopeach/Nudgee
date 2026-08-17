@@ -54,8 +54,10 @@ import androidx.compose.ui.window.DialogProperties
 import com.soopeach.nudgee.client.NudgeeColors
 import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.domain.reminder.AuthenticationRequiredException
+import com.soopeach.nudgee.client.domain.reminder.DailyParseLimitReachedException
 import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
 import com.soopeach.nudgee.client.domain.reminder.ParsedReminderDraft
+import com.soopeach.nudgee.client.domain.reminder.ReminderParseUsage
 import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
 import com.soopeach.nudgee.client.domain.task.Task
 import com.soopeach.nudgee.client.domain.task.TaskRepository
@@ -110,7 +112,9 @@ private data class QuickAddUiState(
     val naturalLanguage: String = "",
     val parsedReminder: ParsedReminderDraft? = null,
     val parserMessage: String? = null,
+    val isParserMessageError: Boolean = false,
     val isUnderstanding: Boolean = false,
+    val parseUsage: ReminderParseUsage? = null,
     val manualTitle: String = "",
     val manualDate: String = defaultManualDate(),
     val manualTime: String = defaultManualTime(),
@@ -124,10 +128,14 @@ private class QuickAddViewModel(
     private val _state = MutableStateFlow(QuickAddUiState())
     val state = _state.asStateFlow()
 
+    init {
+        refreshParseUsage()
+    }
+
     fun selectMode(mode: ReminderInputMode) = update { it.copy(mode = mode) }
 
     fun updateNaturalLanguage(value: String) = update {
-        it.copy(naturalLanguage = value, parserMessage = null, parsedReminder = null)
+        it.copy(naturalLanguage = value, parserMessage = null, isParserMessageError = false, parsedReminder = null)
     }
 
     fun updateManualTitle(value: String) = update { it.copy(manualTitle = value, manualError = null) }
@@ -139,28 +147,43 @@ private class QuickAddViewModel(
         val prompt = state.value.naturalLanguage.trim()
         if (prompt.isBlank()) return
         if (parser == null) {
-            update { it.copy(parserMessage = "Sign in with Google to let Nudgee understand a natural reminder.") }
+            update {
+                it.copy(
+                    parserMessage = "Sign in with Google to let Nudgee understand a natural reminder.",
+                    isParserMessageError = true,
+                )
+            }
             return
         }
 
-        update { it.copy(isUnderstanding = true, parserMessage = null, parsedReminder = null) }
+        update { it.copy(isUnderstanding = true, parserMessage = null, isParserMessageError = false, parsedReminder = null) }
         viewModelScope.launch {
             runCatching { parser.parse(prompt) }
                 .onSuccess { parsed ->
                     update {
+                        val usage = parsed.remainingFreeParses?.let {
+                            ReminderParseUsage(
+                                usedFreeParses = 10 - it,
+                                remainingFreeParses = it,
+                                dailyFreeParseLimit = 10,
+                            )
+                        } ?: it.parseUsage
                         if (parsed.needsClarification || parsed.notifyAt == null) {
-                            it.copy(parserMessage = parsed.clarification ?: "When should I remind you?")
+                            it.copy(parseUsage = usage, parserMessage = parsed.clarification ?: "When should I remind you?", isParserMessageError = false)
                         } else {
-                            it.copy(parsedReminder = parsed)
+                            it.copy(parseUsage = usage, parsedReminder = parsed)
                         }
                     }
                 }
                 .onFailure { error ->
                     update {
                         it.copy(
-                            parserMessage = when (error) {
-                                is AuthenticationRequiredException -> error.message
-                                else -> error.message ?: "Nudgee could not understand that reminder. Please try again."
+                            parserMessage = error.toReminderParserMessage(),
+                            isParserMessageError = true,
+                            parseUsage = if (error is DailyParseLimitReachedException) {
+                                ReminderParseUsage(usedFreeParses = 10, remainingFreeParses = 0, dailyFreeParseLimit = 10)
+                            } else {
+                                it.parseUsage
                             },
                         )
                     }
@@ -202,7 +225,15 @@ private class QuickAddViewModel(
     }
 
     fun reset() {
-        _state.value = QuickAddUiState()
+        _state.value = QuickAddUiState(parseUsage = _state.value.parseUsage)
+    }
+
+    fun refreshParseUsage() {
+        val activeParser = parser ?: return
+        viewModelScope.launch {
+            runCatching { activeParser.usage() }
+                .onSuccess { usage -> update { it.copy(parseUsage = usage) } }
+        }
     }
 
     private fun update(transform: (QuickAddUiState) -> QuickAddUiState) = _state.update(transform)
@@ -242,7 +273,12 @@ fun MobileHomeScreen(
         floatingActionButton = {
             if (homeState.destination == NudgeeDestination.Home) {
                 FloatingActionButton(
-                    onClick = { homeViewModel.update { it.copy(isQuickAddVisible = true) } },
+                    onClick = {
+                        // The composer ViewModel survives sheet dismissal, so always
+                        // refresh the server-owned allowance before showing it again.
+                        quickAddViewModel.refreshParseUsage()
+                        homeViewModel.update { it.copy(isQuickAddVisible = true) }
+                    },
                     containerColor = NudgeeColors.periwinkle,
                     contentColor = NudgeeColors.ink,
                     shape = RoundedCornerShape(18.dp),
@@ -667,6 +703,8 @@ private fun QuickAddSheet(
                     naturalLanguage = state.naturalLanguage,
                     message = state.parserMessage,
                     isUnderstanding = state.isUnderstanding,
+                    usage = state.parseUsage,
+                    isMessageError = state.isParserMessageError,
                     onNaturalLanguageChange = viewModel::updateNaturalLanguage,
                     onUnderstand = viewModel::understandReminder,
                 )
@@ -710,28 +748,78 @@ private fun NaturalLanguageReminderForm(
     naturalLanguage: String,
     message: String?,
     isUnderstanding: Boolean,
+    usage: ReminderParseUsage?,
+    isMessageError: Boolean,
     onNaturalLanguageChange: (String) -> Unit,
     onUnderstand: () -> Unit,
 ) {
+    val hasAiAllowance = usage?.remainingFreeParses != 0
     Text("Tell Nudgee naturally", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
     Spacer(Modifier.height(8.dp))
+    usage?.let { ParseUsageCard(it) }
+    if (usage != null) Spacer(Modifier.height(10.dp))
     NudgeeTextInput(
         value = naturalLanguage,
         onValueChange = onNaturalLanguageChange,
         modifier = Modifier.fillMaxWidth(),
         minLines = 2,
-        placeholder = "e.g. Remind me to buy eggs in 1 hour",
+        placeholder = if (hasAiAllowance) "e.g. Remind me to buy eggs in 1 hour" else "Free AI reminders reset tomorrow",
+        enabled = hasAiAllowance,
     )
     Spacer(Modifier.height(16.dp))
     NudgeeButton(
         label = "Understand reminder",
         onClick = onUnderstand,
-        enabled = naturalLanguage.isNotBlank() && !isUnderstanding,
+        enabled = hasAiAllowance && naturalLanguage.isNotBlank() && !isUnderstanding,
         modifier = Modifier.fillMaxWidth(),
     )
     message?.let {
-        Text(it, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
         Spacer(Modifier.height(12.dp))
+        ParseFeedbackCard(message = it, isError = isMessageError)
+    }
+}
+
+@Composable
+private fun ParseFeedbackCard(message: String, isError: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isError) NudgeeColors.lavenderSurface else NudgeeColors.mint.copy(alpha = 0.28f))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = if (isError) "Couldn’t use AI reminder" else "Nudgee needs one more detail",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = NudgeeColors.ink,
+        )
+        Text(message, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+    }
+}
+
+@Composable
+private fun ParseUsageCard(usage: ReminderParseUsage) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(NudgeeColors.sky.copy(alpha = 0.28f))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Today’s AI reminders", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
+            Text("${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used", style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+        }
+        Text(
+            text = "${usage.remainingFreeParses} left",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = if (usage.remainingFreeParses == 0) NudgeeColors.lavender else NudgeeColors.ink,
+        )
     }
 }
 
@@ -935,6 +1023,21 @@ private fun ParsedReminderDraft.toManualReminderDetails(): Result<ManualReminder
         date = local.date.toString(),
         time = local.time.toString().take(5),
     )
+}
+
+private fun Throwable.toReminderParserMessage(): String {
+    if (this is AuthenticationRequiredException) return message ?: "Sign in with Google before using AI reminders."
+    if (this is DailyParseLimitReachedException) return message ?: "You’ve used all 10 free reminder parses for today. Try again tomorrow."
+
+    val details = message.orEmpty()
+    if (
+        details.contains("daily_parse_limit_reached", ignoreCase = true) ||
+        details.contains("429") ||
+        details.contains("free reminder parses", ignoreCase = true)
+    ) {
+        return "You’ve used all 10 free reminder parses for today. Try again tomorrow."
+    }
+    return "Nudgee couldn’t understand that reminder. Please try again or set it manually."
 }
 
 private fun ParsedReminderDraft.reservationTimeLabel(): String = runCatching {
