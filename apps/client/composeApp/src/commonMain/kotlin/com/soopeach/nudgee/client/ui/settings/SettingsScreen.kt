@@ -20,10 +20,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +44,24 @@ import com.soopeach.nudgee.client.ui.designsystem.NudgeeSurface
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.profile.AccountSettingsSection
 import kotlinx.datetime.TimeZone
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+private class SettingsViewModel : ViewModel() {
+    private val _selectedCategory = MutableStateFlow<SettingsCategory?>(null)
+    val selectedCategory = _selectedCategory.asStateFlow()
+    fun show(category: SettingsCategory) { _selectedCategory.value = category }
+    fun closeCategory() { _selectedCategory.value = null }
+}
+
+private class NotificationSettingsViewModel : ViewModel() {
+    private val _permissionStatus = MutableStateFlow<NotificationPermissionStatus?>(null)
+    val permissionStatus = _permissionStatus.asStateFlow()
+    private val _refreshVersion = MutableStateFlow(0)
+    val refreshVersion = _refreshVersion.asStateFlow()
+    fun updatePermissionStatus(status: NotificationPermissionStatus) { _permissionStatus.value = status }
+    fun refresh() { _refreshVersion.value++ }
+}
 
 @Composable
 fun SettingsScreen(
@@ -49,11 +70,12 @@ fun SettingsScreen(
     onSignOut: () -> Unit,
     contentPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(),
 ) {
-    var selectedCategory by remember { mutableStateOf<SettingsCategory?>(null) }
+    val viewModel: SettingsViewModel = viewModel { SettingsViewModel() }
+    val selectedCategory by viewModel.selectedCategory.collectAsState()
     val uriHandler = LocalUriHandler.current
     if (selectedCategory == SettingsCategory.Notifications) {
         NotificationSettingsScreen(
-            onBack = { selectedCategory = null },
+            onBack = viewModel::closeCategory,
             contentPadding = contentPadding,
         )
         return
@@ -83,7 +105,7 @@ fun SettingsScreen(
             SettingsCard(
                 title = "Reminder delivery",
                 accent = NudgeeColors.sky,
-                onClick = { selectedCategory = SettingsCategory.Notifications },
+                onClick = { viewModel.show(SettingsCategory.Notifications) },
             ) {
                 Text(
                     "Check this device’s delivery setup and how Nudgee sends reminders.",
@@ -152,11 +174,12 @@ private fun NotificationSettingsScreen(
     contentPadding: androidx.compose.foundation.layout.PaddingValues,
 ) {
     val permissionController = rememberNotificationPermissionController()
-    var permissionStatus by remember { mutableStateOf<NotificationPermissionStatus?>(null) }
-    var statusRefreshVersion by remember { mutableStateOf(0) }
+    val viewModel: NotificationSettingsViewModel = viewModel { NotificationSettingsViewModel() }
+    val permissionStatus by viewModel.permissionStatus.collectAsState()
+    val refreshVersion by viewModel.refreshVersion.collectAsState()
 
-    LaunchedEffect(permissionController, statusRefreshVersion) {
-        permissionStatus = permissionController.status()
+    LaunchedEffect(permissionController, refreshVersion) {
+        viewModel.updatePermissionStatus(permissionController.status())
     }
 
     Column(
@@ -230,7 +253,7 @@ private fun NotificationSettingsScreen(
                 Spacer(Modifier.height(4.dp))
                 NudgeeTextButton(
                     label = "Refresh permission status",
-                    onClick = { statusRefreshVersion++ },
+                    onClick = viewModel::refresh,
                 )
                 if (permissionController.supportsLocalTestNotification) {
                     NudgeeTextButton(

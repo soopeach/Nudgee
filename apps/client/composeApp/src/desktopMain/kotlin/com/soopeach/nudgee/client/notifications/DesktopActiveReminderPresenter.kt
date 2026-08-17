@@ -5,7 +5,7 @@ import com.soopeach.nudgee.client.domain.task.Task
 /**
  * Presents only server-dispatched reminders while the desktop app is running.
  * It deliberately owns no reminder timing; the scheduler remains the source
- * of truth and TaskListStore invokes this after its Realtime state changes to
+ * of truth and TaskListViewModel invokes this after its Realtime state changes to
  * `notification_state = sent`.
  */
 object DesktopActiveReminderPresenter {

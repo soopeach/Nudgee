@@ -27,7 +27,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -35,6 +34,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,9 +62,12 @@ import com.soopeach.nudgee.client.ui.designsystem.NudgeeSegmentedControl
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeSurface
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextInput
-import com.soopeach.nudgee.client.ui.home.TaskListStore
+import com.soopeach.nudgee.client.ui.home.TaskListViewModel
 import com.soopeach.nudgee.client.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.Instant
@@ -96,6 +100,21 @@ private enum class DesktopReminderInputMode(val label: String) {
     Manual("Set manually"),
 }
 
+private data class DesktopShellUiState(
+    val destination: DesktopDestination = DesktopDestination.Home,
+    val isComposerVisible: Boolean = false,
+    val taskBeingEdited: Task? = null,
+    val taskPendingDeletion: Task? = null,
+    val selectedWindow: DesktopTaskTimeWindow = DesktopTaskTimeWindow.Today,
+    val selectedStatus: DesktopTaskStatusFilter = DesktopTaskStatusFilter.ToDo,
+)
+
+private class DesktopShellViewModel : ViewModel() {
+    private val _state = MutableStateFlow(DesktopShellUiState())
+    val state = _state.asStateFlow()
+    fun update(transform: (DesktopShellUiState) -> DesktopShellUiState) = _state.update(transform)
+}
+
 @Composable
 actual fun AuthenticatedNudgeeScreen(
     repository: TaskRepository,
@@ -103,19 +122,12 @@ actual fun AuthenticatedNudgeeScreen(
     avatarUrl: String?,
     onSignOut: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    val store = remember(repository) { TaskListStore(repository, scope) }
-    val state by store.state.collectAsState()
+    val store: TaskListViewModel = viewModel { TaskListViewModel(repository) }
+    val taskState by store.state.collectAsState()
+    val shellViewModel: DesktopShellViewModel = viewModel { DesktopShellViewModel() }
+    val shellState by shellViewModel.state.collectAsState()
     val reminderParser = NudgeeSupabase.client?.let(::SupabaseEdgeFunctionReminderParser)
-    var destination by remember { mutableStateOf(DesktopDestination.Home) }
-    var showAddTaskDialog by remember { mutableStateOf(false) }
-    var taskBeingEdited by remember { mutableStateOf<Task?>(null) }
-    var taskPendingDeletion by remember { mutableStateOf<Task?>(null) }
 
-    DisposableEffect(store) {
-        store.start()
-        onDispose { store.stop() }
-    }
     LaunchedEffect(store) {
         store.serverDispatchedTasks.collect(DesktopActiveReminderPresenter::show)
     }
@@ -126,10 +138,10 @@ actual fun AuthenticatedNudgeeScreen(
             .background(NudgeeColors.softSurface),
     ) {
         DesktopSidebar(
-            destination = destination,
+            destination = shellState.destination,
             email = email,
-            onDestinationSelected = { destination = it },
-            onAddTask = { showAddTaskDialog = true },
+            onDestinationSelected = { destination -> shellViewModel.update { it.copy(destination = destination) } },
+            onAddTask = { shellViewModel.update { it.copy(isComposerVisible = true) } },
         )
         Box(
             modifier = Modifier
@@ -142,18 +154,22 @@ actual fun AuthenticatedNudgeeScreen(
                 .weight(1f)
                 .fillMaxHeight(),
         ) {
-            when (destination) {
+            when (shellState.destination) {
                 DesktopDestination.Home -> DesktopHomeWorkspace(
-                    tasks = state.tasks,
-                    isLoading = state.isLoading,
-                    error = state.error,
-                    onAddTask = { showAddTaskDialog = true },
+                    tasks = taskState.tasks,
+                    isLoading = taskState.isLoading,
+                    error = taskState.error,
+                    selectedWindow = shellState.selectedWindow,
+                    selectedStatus = shellState.selectedStatus,
+                    onWindowSelected = { window -> shellViewModel.update { it.copy(selectedWindow = window) } },
+                    onStatusSelected = { status -> shellViewModel.update { it.copy(selectedStatus = status) } },
+                    onAddTask = { shellViewModel.update { it.copy(isComposerVisible = true) } },
                     onToggleTask = store::toggleTask,
-                    onDeleteTask = { taskPendingDeletion = it },
-                    onEditTask = { taskBeingEdited = it },
+                    onDeleteTask = { task -> shellViewModel.update { it.copy(taskPendingDeletion = task) } },
+                    onEditTask = { task -> shellViewModel.update { it.copy(taskBeingEdited = task) } },
                 )
                 DesktopDestination.Calendar -> CalendarScreen(
-                    tasks = state.tasks,
+                    tasks = taskState.tasks,
                     contentPadding = PaddingValues(28.dp),
                     onToggleTask = store::toggleTask,
                     onDeleteTask = store::deleteTask,
@@ -169,35 +185,35 @@ actual fun AuthenticatedNudgeeScreen(
         }
     }
 
-    if (showAddTaskDialog) {
+    if (shellState.isComposerVisible) {
         DesktopTaskComposerDialog(
             parser = reminderParser,
-            onDismiss = { showAddTaskDialog = false },
+            onDismiss = { shellViewModel.update { it.copy(isComposerVisible = false) } },
             onAddTask = { title, notifyAt ->
                 store.addTask(title, notifyAt)
-                showAddTaskDialog = false
+                shellViewModel.update { it.copy(isComposerVisible = false) }
             },
         )
     }
 
-    taskBeingEdited?.let { task ->
+    shellState.taskBeingEdited?.let { task ->
         DesktopTaskEditDialog(
             task = task,
-            onDismiss = { taskBeingEdited = null },
+            onDismiss = { shellViewModel.update { it.copy(taskBeingEdited = null) } },
             onSave = { title, notifyAt ->
                 store.updateTask(task, title, notifyAt)
-                taskBeingEdited = null
+                shellViewModel.update { it.copy(taskBeingEdited = null) }
             },
         )
     }
 
-    taskPendingDeletion?.let { task ->
+    shellState.taskPendingDeletion?.let { task ->
         DesktopDeleteConfirmationDialog(
             task = task,
-            onDismiss = { taskPendingDeletion = null },
+            onDismiss = { shellViewModel.update { it.copy(taskPendingDeletion = null) } },
             onConfirm = {
                 store.deleteTask(task)
-                taskPendingDeletion = null
+                shellViewModel.update { it.copy(taskPendingDeletion = null) }
             },
         )
     }
@@ -262,6 +278,10 @@ private fun DesktopHomeWorkspace(
     tasks: List<Task>,
     isLoading: Boolean,
     error: String?,
+    selectedWindow: DesktopTaskTimeWindow,
+    selectedStatus: DesktopTaskStatusFilter,
+    onWindowSelected: (DesktopTaskTimeWindow) -> Unit,
+    onStatusSelected: (DesktopTaskStatusFilter) -> Unit,
     onAddTask: () -> Unit,
     onToggleTask: (Task) -> Unit,
     onDeleteTask: (Task) -> Unit,
@@ -271,8 +291,6 @@ private fun DesktopHomeWorkspace(
     val todayTasks = tasks.filter { it.localDate() == today }
     val completedToday = todayTasks.count(Task::completed)
     val listState = rememberLazyListState()
-    var selectedWindow by remember { mutableStateOf(DesktopTaskTimeWindow.Today) }
-    var selectedStatus by remember { mutableStateOf(DesktopTaskStatusFilter.ToDo) }
     val visibleTasks = tasks
         .filter { it.completed == selectedStatus.completed && it.isInWindow(selectedWindow) }
         .sortedBy(Task::notifyAt)
@@ -305,14 +323,14 @@ private fun DesktopHomeWorkspace(
                 NudgeeSegmentedControl(
                     options = DesktopTaskTimeWindow.entries.map(DesktopTaskTimeWindow::label),
                     selectedIndex = selectedWindow.ordinal,
-                    onOptionSelected = { selectedWindow = DesktopTaskTimeWindow.entries[it] },
+                    onOptionSelected = { onWindowSelected(DesktopTaskTimeWindow.entries[it]) },
                 )
             }
             item {
                 NudgeeSegmentedControl(
                     options = DesktopTaskStatusFilter.entries.map(DesktopTaskStatusFilter::label),
                     selectedIndex = selectedStatus.ordinal,
-                    onOptionSelected = { selectedStatus = DesktopTaskStatusFilter.entries[it] },
+                    onOptionSelected = { onStatusSelected(DesktopTaskStatusFilter.entries[it]) },
                     selectedColor = NudgeeColors.mint,
                 )
             }

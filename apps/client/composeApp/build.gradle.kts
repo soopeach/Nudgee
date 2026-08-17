@@ -48,6 +48,7 @@ kotlin {
             implementation(compose.material3)
             implementation(compose.ui)
             implementation(compose.components.resources)
+            implementation(libs.androidx.lifecycle.viewmodel.compose)
             implementation(platform("io.github.jan-tennert.supabase:bom:${libs.versions.supabase.get()}"))
             implementation("io.github.jan-tennert.supabase:auth-kt")
             implementation("io.github.jan-tennert.supabase:functions-kt")
@@ -69,6 +70,7 @@ kotlin {
         }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
+            implementation(libs.kotlinx.coroutines.swing)
             implementation("io.ktor:ktor-client-cio:${libs.versions.ktor.get()}")
         }
         iosMain.dependencies {

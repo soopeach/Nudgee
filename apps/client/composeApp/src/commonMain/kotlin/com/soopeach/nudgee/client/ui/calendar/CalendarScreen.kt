@@ -23,10 +23,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,8 +49,61 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 private val weekdayLabels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+private data class CalendarUiState(
+    val displayedMonth: LocalDate,
+    val selectedDate: LocalDate,
+    val taskInDetail: Task? = null,
+)
+
+private class CalendarViewModel(today: LocalDate) : ViewModel() {
+    private val _state = MutableStateFlow(CalendarUiState(LocalDate(today.year, today.monthNumber, 1), today))
+    val state = _state.asStateFlow()
+    fun update(transform: (CalendarUiState) -> CalendarUiState) = _state.update(transform)
+}
+
+private data class CalendarTaskDetailUiState(
+    val isEditing: Boolean,
+    val title: String,
+    val date: String,
+    val time: String,
+    val error: String? = null,
+    val isConfirmingDeletion: Boolean = false,
+)
+
+private class CalendarTaskDetailViewModel(task: Task) : ViewModel() {
+    private val _state = MutableStateFlow(
+        CalendarTaskDetailUiState(
+            isEditing = false,
+            title = task.title,
+            date = task.dateInDeviceTimezone().toString(),
+            time = task.timeIn24HourFormat(),
+        ),
+    )
+    val state = _state.asStateFlow()
+
+    fun startEditing() = update { it.copy(isEditing = true, error = null) }
+    fun cancelEditing() = update { it.copy(isEditing = false, error = null) }
+    fun updateTitle(value: String) = update { it.copy(title = value, error = null) }
+    fun updateDate(value: String) = update { it.copy(date = value, error = null) }
+    fun updateTime(value: String) = update { it.copy(time = value, error = null) }
+    fun showDeleteConfirmation() = update { it.copy(isConfirmingDeletion = true) }
+    fun dismissDeleteConfirmation() = update { it.copy(isConfirmingDeletion = false) }
+
+    fun validateSave(onValid: (title: String, notifyAt: String) -> Unit) {
+        val current = state.value
+        taskUpdateInstant(current.date, current.time)
+            .onSuccess { onValid(current.title.trim(), it) }
+            .onFailure { error -> update { it.copy(error = error.message ?: "Enter a valid date and time.") } }
+    }
+
+    private fun update(transform: (CalendarTaskDetailUiState) -> CalendarTaskDetailUiState) = _state.update(transform)
+}
 
 @Composable
 fun CalendarScreen(
@@ -60,10 +114,9 @@ fun CalendarScreen(
     onUpdateTask: (Task, String, String) -> Unit = { _, _, _ -> },
 ) {
     val today = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date }
-    var displayedMonth by remember { mutableStateOf(LocalDate(today.year, today.monthNumber, 1)) }
-    var selectedDate by remember { mutableStateOf(today) }
-    var taskInDetail by remember { mutableStateOf<Task?>(null) }
-    val selectedTasks = tasks.filter { it.dateInDeviceTimezone() == selectedDate }.sortedBy { it.notifyAt }
+    val calendarViewModel: CalendarViewModel = viewModel { CalendarViewModel(today) }
+    val state by calendarViewModel.state.collectAsState()
+    val selectedTasks = tasks.filter { it.dateInDeviceTimezone() == state.selectedDate }.sortedBy { it.notifyAt }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -77,42 +130,42 @@ fun CalendarScreen(
         }
         item {
             CalendarMonth(
-                month = displayedMonth,
-                selectedDate = selectedDate,
+                month = state.displayedMonth,
+                selectedDate = state.selectedDate,
                 today = today,
                 tasks = tasks,
-                onPreviousMonth = { displayedMonth = displayedMonth.plus(DatePeriod(months = -1)) },
-                onNextMonth = { displayedMonth = displayedMonth.plus(DatePeriod(months = 1)) },
-                onDateSelected = { selectedDate = it },
+                onPreviousMonth = { calendarViewModel.update { it.copy(displayedMonth = it.displayedMonth.plus(DatePeriod(months = -1))) } },
+                onNextMonth = { calendarViewModel.update { it.copy(displayedMonth = it.displayedMonth.plus(DatePeriod(months = 1))) } },
+                onDateSelected = { date -> calendarViewModel.update { it.copy(selectedDate = date) } },
             )
         }
         item {
-            Text(selectedDateHeading(selectedDate, today), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
+            Text(selectedDateHeading(state.selectedDate, today), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
         }
         if (selectedTasks.isEmpty()) {
             item { EmptyDayCard() }
         } else {
             items(selectedTasks, key = { it.id }) { task ->
-                CalendarTaskCard(task = task, onClick = { taskInDetail = task })
+                CalendarTaskCard(task = task, onClick = { calendarViewModel.update { it.copy(taskInDetail = task) } })
             }
         }
     }
 
-    taskInDetail?.let { task ->
+    state.taskInDetail?.let { task ->
         CalendarTaskDetailSheet(
             task = task,
-            onDismiss = { taskInDetail = null },
+            onDismiss = { calendarViewModel.update { it.copy(taskInDetail = null) } },
             onToggleTask = {
                 onToggleTask(task)
-                taskInDetail = null
+                calendarViewModel.update { it.copy(taskInDetail = null) }
             },
             onDeleteTask = {
                 onDeleteTask(task)
-                taskInDetail = null
+                calendarViewModel.update { it.copy(taskInDetail = null) }
             },
             onSave = { title, notifyAt ->
                 onUpdateTask(task, title, notifyAt)
-                taskInDetail = null
+                calendarViewModel.update { it.copy(taskInDetail = null) }
             },
         )
     }
@@ -254,12 +307,8 @@ private fun CalendarTaskDetailSheet(
     onDeleteTask: () -> Unit,
     onSave: (String, String) -> Unit,
 ) {
-    var isEditing by remember(task.id) { mutableStateOf(false) }
-    var title by remember(task.id) { mutableStateOf(task.title) }
-    var date by remember(task.id) { mutableStateOf(task.dateInDeviceTimezone().toString()) }
-    var time by remember(task.id) { mutableStateOf(task.timeIn24HourFormat()) }
-    var error by remember(task.id) { mutableStateOf<String?>(null) }
-    var isConfirmingDeletion by remember(task.id) { mutableStateOf(false) }
+    val detailViewModel: CalendarTaskDetailViewModel = viewModel(key = task.id) { CalendarTaskDetailViewModel(task) }
+    val state by detailViewModel.state.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -283,52 +332,48 @@ private fun CalendarTaskDetailSheet(
                 Box(Modifier.size(width = 42.dp, height = 4.dp).background(NudgeeColors.line, CircleShape))
             }
             Text(
-                text = if (isEditing) "Edit task" else "Task details",
+                text = if (state.isEditing) "Edit task" else "Task details",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.ExtraBold,
                 color = NudgeeColors.ink,
             )
 
-            if (isEditing) {
+            if (state.isEditing) {
                 NudgeeTextInput(
-                    value = title,
-                    onValueChange = { title = it; error = null },
+                    value = state.title,
+                    onValueChange = detailViewModel::updateTitle,
                     placeholder = "Task title",
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     NudgeeTextInput(
-                        value = date,
-                        onValueChange = { date = it; error = null },
+                        value = state.date,
+                        onValueChange = detailViewModel::updateDate,
                         placeholder = "YYYY-MM-DD",
                         modifier = Modifier.weight(1.35f),
                     )
                     NudgeeTextInput(
-                        value = time,
-                        onValueChange = { time = it; error = null },
+                        value = state.time,
+                        onValueChange = detailViewModel::updateTime,
                         placeholder = "HH:MM",
                         modifier = Modifier.weight(1f),
                     )
                 }
-                error?.let { message ->
+                state.error?.let { message ->
                     Text(message, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     NudgeeButton(
                         label = "Cancel",
-                        onClick = { isEditing = false; error = null },
+                        onClick = detailViewModel::cancelEditing,
                         modifier = Modifier.weight(1f),
                         style = NudgeeButtonStyle.Secondary,
                     )
                     NudgeeButton(
                         label = "Save changes",
-                        onClick = {
-                            taskUpdateInstant(date, time)
-                                .onSuccess { onSave(title.trim(), it) }
-                                .onFailure { error = it.message ?: "Enter a valid date and time." }
-                        },
+                        onClick = { detailViewModel.validateSave(onSave) },
                         modifier = Modifier.weight(1f),
-                        enabled = title.isNotBlank() && date.isNotBlank() && time.isNotBlank(),
+                        enabled = state.title.isNotBlank() && state.date.isNotBlank() && state.time.isNotBlank(),
                     )
                 }
             } else {
@@ -363,7 +408,7 @@ private fun CalendarTaskDetailSheet(
                         )
                     }
                 }
-                if (isConfirmingDeletion) {
+                if (state.isConfirmingDeletion) {
                     NudgeeSurface(
                         shape = RoundedCornerShape(20.dp),
                         containerColor = NudgeeColors.lavenderSurface,
@@ -378,7 +423,7 @@ private fun CalendarTaskDetailSheet(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         NudgeeButton(
                             label = "Keep task",
-                            onClick = { isConfirmingDeletion = false },
+                            onClick = detailViewModel::dismissDeleteConfirmation,
                             modifier = Modifier.weight(1f),
                             style = NudgeeButtonStyle.Secondary,
                         )
@@ -397,13 +442,13 @@ private fun CalendarTaskDetailSheet(
                     )
                     NudgeeButton(
                         label = "Edit task",
-                        onClick = { isEditing = true },
+                        onClick = detailViewModel::startEditing,
                         modifier = Modifier.fillMaxWidth(),
                         style = NudgeeButtonStyle.Secondary,
                     )
                     NudgeeTextButton(
                         label = "Delete task",
-                        onClick = { isConfirmingDeletion = true },
+                        onClick = detailViewModel::showDeleteConfirmation,
                         modifier = Modifier.fillMaxWidth(),
                         color = NudgeeColors.mutedInk,
                     )
