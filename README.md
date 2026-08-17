@@ -43,6 +43,12 @@ supabase functions deploy parse-reminder
 
 The Gemini key must never be added to `apps/web/.env`; the browser calls the authenticated Edge Function instead.
 
+Natural-language parsing has a server-enforced allowance of 10 free requests per user and local calendar day. Apply the matching Supabase migration before deploying the function:
+
+```bash
+npx supabase db push
+```
+
 ## Deploy
 
 Deploy `apps/web` to Vercel with `apps/web` as the Root Directory. The Supabase Edge Function and scheduled trigger will provide the server-owned notification scheduler; Firebase is used only as the web FCM delivery channel.
