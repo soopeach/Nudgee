@@ -55,6 +55,7 @@ import kotlinx.datetime.TimeZone
 import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
 import com.soopeach.nudgee.client.domain.reminder.ReminderParseUsage
 import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
+import com.soopeach.nudgee.client.domain.account.SupabaseAccountDeletionService
 
 private class SettingsViewModel : ViewModel() {
     private val _selectedCategory = MutableStateFlow<SettingsCategory?>(null)
@@ -115,6 +116,31 @@ private class AiParseUsageViewModel(
     }
 }
 
+private data class AccountDeletionUiState(
+    val isDeleting: Boolean = false,
+    val error: String? = null,
+)
+
+private class AccountDeletionViewModel(
+    private val service: SupabaseAccountDeletionService?,
+) : ViewModel() {
+    private val _state = MutableStateFlow(AccountDeletionUiState())
+    val state = _state.asStateFlow()
+
+    fun deleteAccount(onDeleted: () -> Unit) {
+        val activeService = service ?: run {
+            _state.value = AccountDeletionUiState(error = "Account deletion is unavailable until Supabase is configured.")
+            return
+        }
+        _state.value = AccountDeletionUiState(isDeleting = true)
+        viewModelScope.launch {
+            runCatching { activeService.deleteCurrentAccount() }
+                .onSuccess { onDeleted() }
+                .onFailure { error -> _state.value = AccountDeletionUiState(error = error.message ?: "Nudgee could not delete your account. Please try again.") }
+        }
+    }
+}
+
 @Composable
 fun SettingsScreen(
     email: String?,
@@ -126,8 +152,12 @@ fun SettingsScreen(
     val aiUsageViewModel: AiParseUsageViewModel = viewModel {
         AiParseUsageViewModel(NudgeeSupabase.client?.let(::SupabaseEdgeFunctionReminderParser))
     }
+    val accountDeletionViewModel: AccountDeletionViewModel = viewModel {
+        AccountDeletionViewModel(NudgeeSupabase.client?.let(::SupabaseAccountDeletionService))
+    }
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val aiUsageState by aiUsageViewModel.state.collectAsState()
+    val accountDeletionState by accountDeletionViewModel.state.collectAsState()
     val rewardedAdController = rememberRewardedAdController()
     val uriHandler = LocalUriHandler.current
 
@@ -201,7 +231,16 @@ fun SettingsScreen(
         }
 
         item { SettingsSectionLabel("Account") }
-        item { AccountSettingsSection(email = email, avatarUrl = avatarUrl, onSignOut = onSignOut) }
+        item {
+            AccountSettingsSection(
+                email = email,
+                avatarUrl = avatarUrl,
+                onSignOut = onSignOut,
+                onDeleteAccount = { accountDeletionViewModel.deleteAccount(onSignOut) },
+                isDeletingAccount = accountDeletionState.isDeleting,
+                accountDeletionError = accountDeletionState.error,
+            )
+        }
         item {
             AiReminderUsageCard(
                 usage = aiUsageState.usage,
@@ -246,44 +285,32 @@ private fun AiReminderUsageCard(
                 color = NudgeeColors.mutedInk,
             )
         } else {
-            val totalAvailable = usage.remainingFreeParses + usage.bonusCredits
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (usage.bonusCredits > 0) {
-                        Text(
-                            "${usage.bonusCredits} reward credit${if (usage.bonusCredits == 1) "" else "s"} ready to use",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = NudgeeColors.ink,
-                        )
-                        Text(
-                            "Your ${usage.dailyFreeParseLimit} free AI reminders refresh at local midnight.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = NudgeeColors.mutedInk,
-                        )
-                    } else {
-                        Text(
-                            "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used today",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = NudgeeColors.ink,
-                        )
-                        Text(
-                            "Up to ${usage.dailyFreeParseLimit} are free each day. Your allowance resets at local midnight.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = NudgeeColors.mutedInk,
-                        )
-                    }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (usage.bonusCredits > 0) {
+                    Text(
+                        "${usage.bonusCredits} reward credit${if (usage.bonusCredits == 1) "" else "s"} ready to use",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = NudgeeColors.ink,
+                    )
+                    Text(
+                        "Your ${usage.dailyFreeParseLimit} free AI reminders refresh at local midnight.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NudgeeColors.mutedInk,
+                    )
+                } else {
+                    Text(
+                        "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used today",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = NudgeeColors.ink,
+                    )
+                    Text(
+                        "Up to ${usage.dailyFreeParseLimit} are free each day. Your allowance resets at local midnight.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NudgeeColors.mutedInk,
+                    )
                 }
-                Text(
-                    if (totalAvailable > 0) "$totalAvailable available" else "0 left",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (totalAvailable == 0) NudgeeColors.lavender else NudgeeColors.ink,
-                )
             }
             if (usage.remainingFreeParses == 0 && rewardedAdController != null) {
                 Spacer(Modifier.height(14.dp))

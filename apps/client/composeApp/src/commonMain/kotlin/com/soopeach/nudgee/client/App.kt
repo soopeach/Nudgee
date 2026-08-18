@@ -70,7 +70,13 @@ fun App() {
                 avatarUrl = configuredSupabase.auth.currentUserOrNull()?.userMetadata?.get("avatar_url")?.jsonPrimitive?.contentOrNull
                     ?: configuredSupabase.auth.currentUserOrNull()?.userMetadata?.get("picture")?.jsonPrimitive?.contentOrNull,
                 onSignOut = {
-                    coroutineScope.launch { configuredSupabase.auth.signOut() }
+                    coroutineScope.launch {
+                        // A server-side account deletion revokes the Auth user before
+                        // this callback runs. Always clear local storage even if the
+                        // remote sign-out endpoint therefore rejects the old token.
+                        runCatching { configuredSupabase.auth.signOut() }
+                        configuredSupabase.auth.clearSession()
+                    }
                 },
             )
             }
