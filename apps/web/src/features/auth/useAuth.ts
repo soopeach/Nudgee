@@ -3,6 +3,7 @@ import { isSupabaseConfigured, supabase } from '../../lib/supabase'
 import { mapSupabaseUser, signInWithGoogle, signOutCurrentUser } from './authService'
 import type { AuthenticatedUser } from './types'
 import { registerCurrentDevice } from '../devices/deviceRegistration'
+import { syncProfileTimezone } from './profileTimezone'
 
 type AuthState = { user: AuthenticatedUser | null; isLoading: boolean; error: string | null }
 
@@ -13,12 +14,18 @@ export function useAuth() {
     void supabase.auth.getSession().then(({ data, error }) => {
       const mappedUser = mapSupabaseUser(data.session?.user ?? null)
       setState({ user: mappedUser, isLoading: false, error: error?.message ?? null })
-      if (mappedUser) void registerCurrentDevice(mappedUser.id).catch(() => undefined)
+      if (mappedUser) {
+        void registerCurrentDevice(mappedUser.id).catch(() => undefined)
+        void syncProfileTimezone(mappedUser.id).catch(() => undefined)
+      }
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       const mappedUser = mapSupabaseUser(session?.user ?? null)
       setState({ user: mappedUser, isLoading: false, error: null })
-      if (mappedUser) void registerCurrentDevice(mappedUser.id).catch(() => undefined)
+      if (mappedUser) {
+        void registerCurrentDevice(mappedUser.id).catch(() => undefined)
+        void syncProfileTimezone(mappedUser.id).catch(() => undefined)
+      }
     })
     return () => listener.subscription.unsubscribe()
   }, [])
