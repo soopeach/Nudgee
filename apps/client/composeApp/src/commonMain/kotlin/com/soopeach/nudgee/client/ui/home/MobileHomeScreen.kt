@@ -3,6 +3,8 @@ package com.soopeach.nudgee.client.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,12 +29,14 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -691,8 +695,8 @@ private fun EmptyTaskState(status: TaskStatusFilter, window: TaskTimeWindow) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun QuickAddSheet(
     viewModel: QuickAddViewModel,
     onDismiss: () -> Unit,
@@ -701,66 +705,55 @@ private fun QuickAddSheet(
     val state by viewModel.state.collectAsState()
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
         onDismissRequest = { if (!state.isUnderstanding) onDismiss() },
+        sheetState = sheetState,
         containerColor = NudgeeColors.softSurface,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        dragHandle = null,
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp),
+                .padding(bottom = 80.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 42.dp, height = 4.dp)
-                        .background(NudgeeColors.line, CircleShape),
-                )
-            }
-            Spacer(Modifier.height(20.dp))
-            Text("Add a nudge", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
-            Text("Keep it simple. Nudgee handles the timing.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
-            Spacer(Modifier.height(16.dp))
-            NudgeeSegmentedControl(
-                options = ReminderInputMode.entries.map(ReminderInputMode::label),
-                selectedIndex = state.mode.ordinal,
-                onOptionSelected = { viewModel.selectMode(ReminderInputMode.entries[it]) },
-                selectedColor = NudgeeColors.sky.copy(alpha = 0.45f),
-            )
-            Spacer(Modifier.height(16.dp))
-            when (state.mode) {
-                ReminderInputMode.NaturalLanguage -> NaturalLanguageReminderForm(
-                    naturalLanguage = state.naturalLanguage,
-                    clarificationMessage = state.inlineClarificationMessage,
-                    isUnderstanding = state.isUnderstanding,
-                    usage = state.parseUsage,
-                    onNaturalLanguageChange = viewModel::updateNaturalLanguage,
-                    onUnderstand = {
-                        focusManager.clearFocus(force = true)
-                        keyboardController?.hide()
-                        viewModel.understandReminder()
-                    },
-                )
-                ReminderInputMode.Manual -> ManualReminderForm(
-                    title = state.manualTitle,
-                    date = state.manualDate,
-                    time = state.manualTime,
-                    error = state.manualError,
-                    onTitleChange = viewModel::updateManualTitle,
-                    onDateChange = viewModel::updateManualDate,
-                    onTimeChange = viewModel::updateManualTime,
-                    onAdd = { viewModel.validateManualReminder(onAdd) },
-                )
-            }
+            Spacer(Modifier.height(8.dp))
+                    Text("Add a nudge", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
+                    Text("Keep it simple. Nudgee handles the timing.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
+                    Spacer(Modifier.height(16.dp))
+                    NudgeeSegmentedControl(
+                        options = ReminderInputMode.entries.map(ReminderInputMode::label),
+                        selectedIndex = state.mode.ordinal,
+                        onOptionSelected = { viewModel.selectMode(ReminderInputMode.entries[it]) },
+                        selectedColor = NudgeeColors.sky.copy(alpha = 0.45f),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    when (state.mode) {
+                        ReminderInputMode.NaturalLanguage -> NaturalLanguageReminderForm(
+                            naturalLanguage = state.naturalLanguage,
+                            clarificationMessage = state.inlineClarificationMessage,
+                            isUnderstanding = state.isUnderstanding,
+                            usage = state.parseUsage,
+                            onNaturalLanguageChange = viewModel::updateNaturalLanguage,
+                            onUnderstand = {
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                                viewModel.understandReminder()
+                            },
+                        )
+                        ReminderInputMode.Manual -> ManualReminderForm(
+                            title = state.manualTitle,
+                            date = state.manualDate,
+                            time = state.manualTime,
+                            error = state.manualError,
+                            onTitleChange = viewModel::updateManualTitle,
+                            onDateChange = viewModel::updateManualDate,
+                            onTimeChange = viewModel::updateManualTime,
+                            onAdd = { viewModel.validateManualReminder(onAdd) },
+                        )
+                    }
         }
     }
 
@@ -926,10 +919,12 @@ private fun ParseUsageCard(usage: ReminderParseUsage) {
             .clip(RoundedCornerShape(16.dp))
             .background(NudgeeColors.sky.copy(alpha = 0.28f))
             .padding(horizontal = 14.dp, vertical = 11.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
             if (usage.bonusCredits > 0) {
                 Text("Reward credits", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
                 Text(
@@ -946,12 +941,23 @@ private fun ParseUsageCard(usage: ReminderParseUsage) {
                 )
             }
         }
-        Text(
-            text = "${availableCredits} left",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.ExtraBold,
-            color = if (availableCredits == 0) NudgeeColors.lavender else NudgeeColors.ink,
-        )
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(11.dp))
+                .background(if (availableCredits == 0) NudgeeColors.lavenderSurface else NudgeeColors.mint.copy(alpha = 0.7f))
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "$availableCredits left",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.ExtraBold,
+                color = if (availableCredits == 0) NudgeeColors.lavender else NudgeeColors.ink,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
     }
 }
 
