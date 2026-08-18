@@ -7,6 +7,13 @@ export type ParsedReminder = {
   clarification: string | null
 }
 
+export type ReminderParseUsage = {
+  usedFreeParses: number
+  remainingFreeParses: number
+  bonusCredits: number
+  dailyFreeParseLimit: number
+}
+
 function readParsedReminder(value: unknown): ParsedReminder {
   if (!value || typeof value !== 'object') throw new Error('Nudgee could not understand that reminder. Please try again.')
   const parsed = value as Record<string, unknown>
@@ -32,4 +39,22 @@ export async function parseNaturalLanguageReminder(text: string): Promise<Parsed
   })
   if (error) throw new Error(error.message || 'Nudgee could not parse that reminder.')
   return readParsedReminder(data)
+}
+
+export async function getReminderParseUsage(): Promise<ReminderParseUsage> {
+  if (!supabase) throw new Error('Supabase is not configured. Check your environment variables.')
+  const { data, error } = await supabase.functions.invoke('parse-reminder', {
+    body: { action: 'usage', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+  })
+  if (error) throw new Error(error.message || 'Nudgee could not load AI reminder usage.')
+  const usage = data as Partial<ReminderParseUsage> | null
+  if (!usage || typeof usage.remainingFreeParses !== 'number' || typeof usage.bonusCredits !== 'number') {
+    throw new Error('Nudgee could not load AI reminder usage.')
+  }
+  return {
+    usedFreeParses: usage.usedFreeParses ?? 0,
+    remainingFreeParses: usage.remainingFreeParses,
+    bonusCredits: usage.bonusCredits,
+    dailyFreeParseLimit: usage.dailyFreeParseLimit ?? 10,
+  }
 }

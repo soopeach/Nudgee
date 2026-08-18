@@ -39,6 +39,19 @@ export async function setTodoCompleted(userId: string, id: string, completed: bo
   return toTodo(data as TaskRow)
 }
 
+export async function updateTodo(userId: string, todo: Todo, title: string, notifyAt: string): Promise<Todo> {
+  const client = requireSupabase()
+  const normalizedNotifyAt = new Date(notifyAt).toISOString()
+  const update = {
+    title,
+    notify_at: normalizedNotifyAt,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  }
+  const { data, error } = await client.from('tasks').update(update).eq('id', todo.id).eq('user_id', userId).select('id, title, notify_at, completed, completed_at').single()
+  if (error) throw error
+  return toTodo(data as TaskRow)
+}
+
 export async function removeTodo(userId: string, id: string) {
   const client = requireSupabase()
   const { error } = await client.from('tasks').delete().eq('id', id).eq('user_id', userId)

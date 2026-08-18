@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { formatLocalDateTime } from './reminderDateTime'
-import { createTodo, fetchTodos, removeTodo, setTodoCompleted } from './todoService'
+import { createTodo, fetchTodos, removeTodo, setTodoCompleted, updateTodo as persistTodoUpdate } from './todoService'
 import type { Todo } from './types'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 
@@ -100,5 +100,11 @@ export function useTodos(userId: string) {
     setTodos((current) => current.filter((todo) => todo.id !== id))
   }, [userId])
 
-  return { todos, addTodo, toggleTodo, deleteTodo, isLoading, error, refresh }
+  const updateTodo = useCallback(async (todo: Todo, title: string, notifyAt: string) => {
+    const updated = await persistTodoUpdate(userId, todo, title, notifyAt)
+    setTodos((items) => items.map((item) => item.id === todo.id ? updated : item))
+    return updated
+  }, [userId])
+
+  return { todos, addTodo, toggleTodo, deleteTodo, updateTodo, isLoading, error, refresh }
 }
