@@ -49,6 +49,22 @@ Natural-language parsing has a server-enforced allowance of 10 free requests per
 npx supabase db push
 ```
 
+### Account deletion
+
+Account deletion is handled only by the authenticated `delete-account` Edge Function. Web and native clients show a `DELETE` confirmation prompt, but the server resolves the user from the caller's access token and invokes one atomic database transaction that removes their Nudgee data plus Auth identity.
+
+```bash
+npx supabase functions deploy delete-account
+```
+
+Apply migrations before deploying the function so `delete_nudgee_account` exists:
+
+```bash
+npx supabase db push --linked
+```
+
+No client-side service-role key is required or allowed for this flow.
+
 ## Deploy
 
 Deploy `apps/web` to Vercel with `apps/web` as the Root Directory. The Supabase Edge Function and scheduled trigger will provide the server-owned notification scheduler; Firebase is used only as the web FCM delivery channel.
