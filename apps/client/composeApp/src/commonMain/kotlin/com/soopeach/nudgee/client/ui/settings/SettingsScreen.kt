@@ -33,6 +33,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.soopeach.nudgee.client.NudgeeColors
+import com.soopeach.nudgee.client.data.advertising.RewardedAdController
+import com.soopeach.nudgee.client.data.advertising.RewardedAdStatus
+import com.soopeach.nudgee.client.data.advertising.rememberRewardedAdController
 import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.data.notifications.NotificationPermissionStatus
 import com.soopeach.nudgee.client.data.notifications.platformNotificationSetupDescription
@@ -46,6 +49,7 @@ import com.soopeach.nudgee.client.ui.profile.AccountSettingsSection
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.datetime.TimeZone
 import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
@@ -88,6 +92,27 @@ private class AiParseUsageViewModel(
                 .onFailure { _state.update { it.copy(isLoading = false) } }
         }
     }
+
+    /**
+     * An AdMob SSV callback can arrive after the full-screen ad closes. Poll a
+     * small, bounded number of times so the UI catches up without ever making a
+     * client-side reward decision.
+     */
+    fun refreshAfterRewardedAd() {
+        val activeParser = parser ?: return
+        val baselineBonusCredits = _state.value.usage?.bonusCredits ?: 0
+        viewModelScope.launch {
+            repeat(5) { attempt ->
+                delay(if (attempt == 0) 2_500 else 3_000)
+                runCatching { activeParser.usage() }
+                    .onSuccess { usage ->
+                        _state.update { it.copy(usage = usage, isLoading = false) }
+                        if (usage.bonusCredits > baselineBonusCredits) return@launch
+                    }
+                    .onFailure { _state.update { it.copy(isLoading = false) } }
+            }
+        }
+    }
 }
 
 @Composable
@@ -103,10 +128,16 @@ fun SettingsScreen(
     }
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val aiUsageState by aiUsageViewModel.state.collectAsState()
+    val rewardedAdController = rememberRewardedAdController()
     val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(Unit) {
         aiUsageViewModel.refresh()
+    }
+    LaunchedEffect(rewardedAdController, aiUsageState.usage?.remainingFreeParses) {
+        if (aiUsageState.usage?.remainingFreeParses == 0) {
+            rewardedAdController?.load()
+        }
     }
     if (selectedCategory == SettingsCategory.Notifications) {
         NotificationSettingsScreen(
@@ -175,6 +206,8 @@ fun SettingsScreen(
             AiReminderUsageCard(
                 usage = aiUsageState.usage,
                 isLoading = aiUsageState.isLoading,
+                rewardedAdController = rewardedAdController,
+                onAdDismissed = aiUsageViewModel::refreshAfterRewardedAd,
             )
         }
 
@@ -202,6 +235,8 @@ fun SettingsScreen(
 private fun AiReminderUsageCard(
     usage: ReminderParseUsage?,
     isLoading: Boolean,
+    rewardedAdController: RewardedAdController?,
+    onAdDismissed: () -> Unit,
 ) {
     SettingsCard(title = "AI reminder allowance", accent = NudgeeColors.periwinkle) {
         if (usage == null) {
@@ -211,28 +246,69 @@ private fun AiReminderUsageCard(
                 color = NudgeeColors.mutedInk,
             )
         } else {
+            val totalAvailable = usage.remainingFreeParses + usage.bonusCredits
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used today",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = NudgeeColors.ink,
-                    )
-                    Text(
-                        "Your allowance resets at your local midnight.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NudgeeColors.mutedInk,
-                    )
+                    if (usage.bonusCredits > 0) {
+                        Text(
+                            "${usage.bonusCredits} reward credit${if (usage.bonusCredits == 1) "" else "s"} ready to use",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = NudgeeColors.ink,
+                        )
+                        Text(
+                            "Your ${usage.dailyFreeParseLimit} free AI reminders refresh at local midnight.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NudgeeColors.mutedInk,
+                        )
+                    } else {
+                        Text(
+                            "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used today",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = NudgeeColors.ink,
+                        )
+                        Text(
+                            "Up to ${usage.dailyFreeParseLimit} are free each day. Your allowance resets at local midnight.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NudgeeColors.mutedInk,
+                        )
+                    }
                 }
                 Text(
-                    "${usage.remainingFreeParses} left",
+                    if (totalAvailable > 0) "$totalAvailable available" else "0 left",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.ExtraBold,
-                    color = if (usage.remainingFreeParses == 0) NudgeeColors.lavender else NudgeeColors.ink,
+                    color = if (totalAvailable == 0) NudgeeColors.lavender else NudgeeColors.ink,
+                )
+            }
+            if (usage.remainingFreeParses == 0 && rewardedAdController != null) {
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    "Need more AI reminders? Watch a short ad to earn 5 credits. Credits appear only after secure server verification, which may take a moment.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NudgeeColors.mutedInk,
+                )
+                Spacer(Modifier.height(10.dp))
+                NudgeeButton(
+                    label = when (rewardedAdController.status) {
+                        RewardedAdStatus.Loading -> "Loading ad…"
+                        RewardedAdStatus.Ready -> "Watch ad for 5 credits"
+                        RewardedAdStatus.Unavailable -> "Try loading an ad"
+                    },
+                    onClick = {
+                        if (rewardedAdController.status == RewardedAdStatus.Ready) {
+                            rewardedAdController.show(onDismissed = onAdDismissed)
+                        } else {
+                            rewardedAdController.load()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = rewardedAdController.status != RewardedAdStatus.Loading,
+                    style = NudgeeButtonStyle.Secondary,
                 )
             }
         }
