@@ -91,7 +91,6 @@ class SupabaseTaskRepository(
                     title = title.trim(),
                     notifyAt = notifyAt,
                     timezone = TimeZone.currentSystemDefault().id,
-                    notificationState = "pending",
                 ),
             ) {
                 select()
@@ -150,7 +149,6 @@ private data class TaskUpdateDto(
     val title: String,
     @SerialName("notify_at") val notifyAt: String,
     val timezone: String,
-    @SerialName("notification_state") val notificationState: String,
 )
 
 private fun TaskDto.toDomain() = Task(

@@ -1,8 +1,9 @@
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { importPKCS8, SignJWT } from 'npm:jose@5'
 
 type Task = { id: string; user_id: string; title: string; notify_at: string }
 type DeviceToken = { id: string; platform: 'web' | 'ios' | 'android' | 'desktop'; token: string }
+type CurrentTaskState = { completed: boolean; notification_state: string }
 
 class UnregisteredFcmTokenError extends Error {}
 
@@ -71,7 +72,20 @@ async function sendFcm(token: string, task: Task, platform: DeviceToken['platfor
   }
 }
 
-async function dispatchTask(client: ReturnType<typeof createClient>, task: Task, accessToken: string | null) {
+async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken: string | null) {
+  // A completion can happen after claim_due_tasks() returns but before FCM is
+  // contacted. Respect the latest server-owned lifecycle state in that gap.
+  const { data: currentTask, error: currentTaskError } = await client
+    .from('tasks')
+    .select('completed, notification_state')
+    .eq('id', task.id)
+    .maybeSingle()
+  if (currentTaskError) throw currentTaskError
+  const latestTask = currentTask as CurrentTaskState | null
+  if (!latestTask || latestTask.completed || latestTask.notification_state !== 'processing') {
+    return { taskId: task.id, failed: false }
+  }
+
   const { data, error } = await client.from('device_tokens').select('id, platform, token').eq('user_id', task.user_id).eq('is_active', true)
   if (error) throw error
   const devices = (data ?? []) as DeviceToken[]
@@ -122,7 +136,7 @@ async function dispatchTask(client: ReturnType<typeof createClient>, task: Task,
   return { taskId: task.id, failed }
 }
 
-async function markTaskFailed(client: ReturnType<typeof createClient>, taskId: string, error: unknown) {
+async function markTaskFailed(client: SupabaseClient<any>, taskId: string, error: unknown) {
   await client.from('tasks').update({ notification_state: 'failed', updated_at: new Date().toISOString() }).eq('id', taskId).eq('notification_state', 'processing')
   console.error('Task dispatch failed', { taskId, error: error instanceof Error ? error.message : error })
 }
