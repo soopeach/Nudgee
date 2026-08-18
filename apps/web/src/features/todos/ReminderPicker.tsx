@@ -26,8 +26,8 @@ export function ReminderPicker({ value, onChange }: ReminderPickerProps) {
         <button className={date === tomorrow ? 'selected' : ''} type="button" onClick={() => setDate(tomorrow)}>Tomorrow</button>
       </div>
       <div className="reminder-inputs">
-        <label><span>Date</span><div className="picker-input-wrap"><span className="picker-icon" aria-hidden="true">▣</span><input type="date" min={today} value={date} onChange={(event) => setDate(event.target.value)} required /></div></label>
-        <label><span>Time</span><div className="picker-input-wrap"><span className="picker-icon clock-icon" aria-hidden="true">◷</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} required /></div></label>
+        <label><span>Date</span><div className="picker-input-wrap"><input type="date" min={today} value={date} onChange={(event) => setDate(event.target.value)} required /></div></label>
+        <label><span>Time</span><div className="picker-input-wrap"><input type="time" value={time} onChange={(event) => setTime(event.target.value)} required /></div></label>
       </div>
     </fieldset>
   )

@@ -26,3 +26,10 @@ export async function signOutCurrentUser() {
   const { error } = await supabase.auth.signOut()
   if (error) throw error
 }
+
+export async function deleteCurrentAccount() {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { error } = await supabase.functions.invoke('delete-account', { body: { confirmation: 'DELETE' } })
+  if (error) throw new Error(error.message || 'Nudgee could not delete your account. Please try again.')
+  await supabase.auth.signOut({ scope: 'local' })
+}

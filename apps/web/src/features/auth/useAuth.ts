@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { isSupabaseConfigured, supabase } from '../../lib/supabase'
-import { mapSupabaseUser, signInWithGoogle, signOutCurrentUser } from './authService'
+import { deleteCurrentAccount, mapSupabaseUser, signInWithGoogle, signOutCurrentUser } from './authService'
 import type { AuthenticatedUser } from './types'
 import { registerCurrentDevice } from '../devices/deviceRegistration'
 import { syncProfileTimezone } from './profileTimezone'
@@ -31,5 +31,9 @@ export function useAuth() {
   }, [])
   const signIn = useCallback(async () => { try { setState((current) => ({ ...current, error: null })); await signInWithGoogle() } catch (error) { setState((current) => ({ ...current, error: error instanceof Error ? error.message : 'Sign-in could not be completed.' })) } }, [])
   const signOut = useCallback(async () => { try { await signOutCurrentUser(); setState({ user: null, isLoading: false, error: null }) } catch (error) { setState((current) => ({ ...current, error: error instanceof Error ? error.message : 'Sign-out could not be completed.' })) } }, [])
-  return { ...state, signIn, signOut }
+  const deleteAccount = useCallback(async () => {
+    try { await deleteCurrentAccount(); setState({ user: null, isLoading: false, error: null }) }
+    catch (error) { const message = error instanceof Error ? error.message : 'Nudgee could not delete your account. Please try again.'; setState((current) => ({ ...current, error: message })); throw new Error(message) }
+  }, [])
+  return { ...state, signIn, signOut, deleteAccount }
 }

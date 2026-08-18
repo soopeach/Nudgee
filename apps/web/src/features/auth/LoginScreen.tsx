@@ -1,4 +1,4 @@
-type LoginScreenProps = {
+  type LoginScreenProps = {
   error: string | null
   onSignIn: () => Promise<void>
 }
