@@ -9,6 +9,24 @@ val localProperties = Properties().apply {
 
 fun localProperty(name: String): String = localProperties.getProperty(name, "").replace("\\", "\\\\").replace("\"", "\\\"")
 
+val defaultAdMobAppId = "ca-app-pub-3940256099942544~3347511713"
+val configuredAdMobAppId = localProperties.getProperty("admob.appId").orEmpty()
+val adMobAppId = configuredAdMobAppId.ifBlank { defaultAdMobAppId }
+val defaultRewardedAdUnitId = "ca-app-pub-3940256099942544/5224354917"
+val configuredRewardedAdUnitId = localProperties.getProperty("admob.rewardedAdUnitId").orEmpty()
+val rewardedAdUnitId = configuredRewardedAdUnitId.ifBlank { defaultRewardedAdUnitId }
+val adMobTestDeviceId = localProperty("admob.testDeviceId")
+val isReleaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.contains("release", ignoreCase = true)
+}
+
+if (isReleaseBuildRequested && (configuredAdMobAppId.isBlank() || configuredRewardedAdUnitId.isBlank())) {
+    throw GradleException(
+        "Release builds require admob.appId and admob.rewardedAdUnitId in local.properties. " +
+            "Nudgee must never ship Google's sample AdMob IDs.",
+    )
+}
+
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidApplication)
@@ -67,6 +85,7 @@ kotlin {
             implementation(platform("com.google.firebase:firebase-bom:${libs.versions.firebase.bom.get()}"))
             implementation("com.google.firebase:firebase-messaging")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+            implementation(libs.google.mobile.ads)
         }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
@@ -91,6 +110,9 @@ android {
         versionName = "0.1.0"
         buildConfigField("String", "SUPABASE_URL", "\"${localProperty("supabase.url")}\"")
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"${localProperty("supabase.publishableKey")}\"")
+        buildConfigField("String", "ADMOB_REWARDED_AD_UNIT_ID", "\"$rewardedAdUnitId\"")
+        buildConfigField("String", "ADMOB_TEST_DEVICE_ID", "\"$adMobTestDeviceId\"")
+        manifestPlaceholders["admobAppId"] = adMobAppId
     }
 
     buildFeatures {
