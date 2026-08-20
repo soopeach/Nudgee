@@ -27,6 +27,8 @@ apps/client/composeApp/google-services.json
 **/.gradle/
 **/.kotlin/
 **/local.properties
+*.jks
+*.keystore
 **/captures/
 **/externalNativeBuild/
 **/.cxx/
@@ -44,3 +46,5 @@ apps/client/composeApp/google-services.json
 *.swp
 *.swo
 handoff.md
+.vercel
+.env*
