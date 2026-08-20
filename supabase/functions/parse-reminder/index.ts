@@ -62,9 +62,29 @@ function validateRequest(body: ParseRequest) {
   const text = typeof body.text === 'string' ? body.text.trim() : ''
   const timezone = validateTimezone(body.timezone)
   const locale = typeof body.locale === 'string' ? body.locale.trim() : 'en'
-  const now = typeof body.now === 'string' && !Number.isNaN(Date.parse(body.now)) ? body.now : new Date().toISOString()
+  // Relative reminders are a server-owned promise. A client-provided clock can
+  // be stale or incorrect, so use the Edge runtime clock as the one reference.
+  const now = new Date().toISOString()
   if (!text || text.length > 1_000) throw new Error('Enter a reminder with fewer than 1,000 characters.')
   return { text, timezone, locale, now }
+}
+
+function explicitRelativeOffsetMs(text: string): number | null {
+  const patterns: Array<{ regex: RegExp; unitMs: number }> = [
+    { regex: /(\d+)\s*분\s*(?:뒤|후)(?:에)?/, unitMs: 60_000 },
+    { regex: /(\d+)\s*시간\s*(?:뒤|후)(?:에)?/, unitMs: 60 * 60_000 },
+    { regex: /\bin\s+(\d+)\s*(?:minute|minutes)\b/i, unitMs: 60_000 },
+    { regex: /\b(\d+)\s*(?:minute|minutes)\s*(?:later|from now)\b/i, unitMs: 60_000 },
+    { regex: /\bin\s+(\d+)\s*(?:hour|hours)\b/i, unitMs: 60 * 60_000 },
+    { regex: /\b(\d+)\s*(?:hour|hours)\s*(?:later|from now)\b/i, unitMs: 60 * 60_000 },
+  ]
+
+  for (const { regex, unitMs } of patterns) {
+    const match = text.match(regex)
+    const amount = Number(match?.[1])
+    if (Number.isSafeInteger(amount) && amount > 0 && amount <= 365 * 24) return amount * unitMs
+  }
+  return null
 }
 
 function validateResult(result: GeminiResult) {
@@ -237,12 +257,21 @@ Deno.serve(async (request) => {
     }
     stage = 'result_validation'
     const result = JSON.parse(getInteractionText(await response.json())) as GeminiResult
-    const validatedResult = validateResult(result)
+    const relativeOffsetMs = explicitRelativeOffsetMs(input.text)
+    const resultWithServerRelativeTime: GeminiResult = relativeOffsetMs == null
+      ? result
+      : {
+          ...result,
+          notifyAt: new Date(Date.parse(input.now) + relativeOffsetMs).toISOString(),
+          needsClarification: false,
+        }
+    const validatedResult = validateResult(resultWithServerRelativeTime)
     console.info('Reminder parse completed', {
       requestId,
       userId: user.id,
       needsClarification: validatedResult.needsClarification,
       hasNotifyAt: validatedResult.notifyAt !== null,
+      usedServerRelativeTime: relativeOffsetMs !== null,
     })
     return json({
       ...validatedResult,
