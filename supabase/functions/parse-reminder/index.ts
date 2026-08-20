@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { recordOperationalError } from '../_shared/operationalErrors.ts'
 
 type ParseRequest = { action?: unknown; text?: unknown; timezone?: unknown; locale?: unknown; now?: unknown }
 type GeminiResult = { title?: unknown; notifyAt?: unknown; needsClarification?: unknown; clarification?: unknown }
@@ -203,6 +204,7 @@ Deno.serve(async (request) => {
 
     if (creditError || !credit) {
       console.error('Reminder parse credit claim failed', { requestId, userId: user.id, error: creditError?.message })
+      await recordOperationalError(client, 'parse_reminder', 'credit_claim_failed', creditError?.message ?? 'No credit claim result.', { requestId })
       return errorJson('Nudgee could not prepare your reminder. Please try again.', 500, requestId)
     }
     if (!credit.allowed) {
@@ -252,6 +254,7 @@ Deno.serve(async (request) => {
         status: response.status,
         response: (await response.text()).slice(0, 500),
       })
+      await recordOperationalError(client, 'parse_reminder', 'gemini_request_failed', `Gemini request returned ${response.status}.`, { requestId, status: response.status })
       await refundParseCredit(client, user.id, input.timezone, credit, requestId, stage)
       return errorJson('Nudgee could not parse that reminder. Please try again.', 502, requestId, 'gemini_request_failed')
     }
@@ -288,6 +291,7 @@ Deno.serve(async (request) => {
       stage,
       error: caught instanceof Error ? caught.message : String(caught),
     })
+    await recordOperationalError(client, 'parse_reminder', stage, caught, { requestId })
     return errorJson(caught instanceof Error ? caught.message : 'Nudgee could not parse that reminder.', 400, requestId, 'reminder_parse_failed')
   }
 })

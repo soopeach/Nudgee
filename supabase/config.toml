@@ -4,6 +4,9 @@ verify_jwt = false
 [functions.parse-reminder]
 verify_jwt = true
 
+[functions.admin-dashboard]
+verify_jwt = true
+
 # AdMob calls this endpoint directly after a rewarded-ad completion. The
 # function validates Google's ECDSA signature before touching any user credit.
 [functions.verify-rewarded-ad]

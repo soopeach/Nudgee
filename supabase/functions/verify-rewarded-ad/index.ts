@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { recordOperationalError } from '../_shared/operationalErrors.ts'
 
 const ADMOB_KEYS_URL = 'https://www.gstatic.com/admob/reward/verifier-keys.json'
 const KEY_CACHE_TTL_MS = 24 * 60 * 60 * 1000
@@ -208,6 +209,17 @@ Deno.serve(async (request) => {
       || message.startsWith('AdMob did not return')
       || message.startsWith('Supabase function')
       || message.startsWith('Could not grant AI credits')
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const serverAuthKey = getServerAuthKey()
+    if (supabaseUrl && serverAuthKey) {
+      await recordOperationalError(
+        createClient(supabaseUrl, serverAuthKey),
+        'rewarded_ad',
+        'callback_rejected',
+        error,
+        { retryable },
+      )
+    }
     return json({ error: retryable ? 'Reward verification is temporarily unavailable.' : 'Invalid rewarded-ad callback.' }, retryable ? 500 : 400)
   }
 })
