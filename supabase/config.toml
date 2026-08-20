@@ -7,6 +7,11 @@ verify_jwt = true
 [functions.admin-dashboard]
 verify_jwt = true
 
+# Notification actions carry a short-lived, server-signed capability token so
+# Android and Web system-notification buttons work even without an app session.
+[functions.reminder-action]
+verify_jwt = false
+
 # AdMob calls this endpoint directly after a rewarded-ad completion. The
 # function validates Google's ECDSA signature before touching any user credit.
 [functions.verify-rewarded-ad]
