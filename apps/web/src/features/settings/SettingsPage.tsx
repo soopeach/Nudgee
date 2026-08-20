@@ -69,7 +69,7 @@ export function SettingsPage({ user, onSignOut, onDeleteAccount }: SettingsPageP
         <section className="settings-group" aria-labelledby="ai-settings-title">
           <div className="settings-group-title"><span className="eyebrow">AI reminders</span><h2 id="ai-settings-title">Your allowance</h2></div>
           <div className="settings-allowance-card">
-            <div><strong>{isLoadingUsage ? 'Checking your allowance…' : usage?.bonusCredits ? `${usage.bonusCredits} reward credits ready` : `${availableParses} AI reminders left`}</strong><small>{isLoadingUsage ? 'Connecting to Nudgee…' : usage?.bonusCredits ? 'Free reminders are used first. Reward credits do not expire yet.' : `${usage?.usedFreeParses ?? 0} of ${usage?.dailyFreeParseLimit ?? 10} free reminders used · resets at local midnight`}</small></div>
+            <div><strong>{isLoadingUsage ? 'Checking your allowance…' : `${usage?.remainingFreeParses ?? 0} of ${usage?.dailyFreeParseLimit ?? 10} free reminders left today`}</strong><small>{isLoadingUsage ? 'Connecting to Nudgee…' : usage?.bonusCredits ? `${usage.bonusCredits} reward credits ready · resets at local midnight` : 'Resets at local midnight'}</small></div>
             <span aria-hidden="true">✦</span>
           </div>
         </section>
@@ -79,6 +79,7 @@ export function SettingsPage({ user, onSignOut, onDeleteAccount }: SettingsPageP
         <section className="settings-group settings-support-group" aria-labelledby="support-settings-title">
           <div className="settings-group-title"><span className="eyebrow">Support</span><h2 id="support-settings-title">Keep Nudgee growing</h2></div>
           <a className="settings-navigation-row" href="https://buymeacoffee.com/hsjeon584z" target="_blank" rel="noreferrer"><span className="settings-row-icon" aria-hidden="true">♡</span><span><strong>Buy me a coffee</strong><small>Support the little nudges</small></span><b>↗</b></a>
+          <a className="settings-navigation-row" href={routes.privacy}><span className="settings-row-icon" aria-hidden="true">⌁</span><span><strong>Privacy Policy</strong><small>How Nudgee handles your information</small></span><b>›</b></a>
           <button className="settings-sign-out" type="button" disabled={isSigningOut} onClick={() => void signOut()}>{isSigningOut ? 'Signing out…' : 'Sign out'}</button>
           <button className="settings-delete-account" type="button" onClick={() => { setDeleteAccountError(null); setIsDeleteDialogOpen(true) }}>Delete account</button>
         </section>
