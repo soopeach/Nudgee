@@ -31,7 +31,10 @@ export function NotificationDeliverySettings({ userId, compact = false }: Notifi
     try {
       stopListeningRef.current?.()
       const result = await startFcmTest((receivedMessage) => setMessage(`Notification received: ${receivedMessage}`))
-      await registerDeviceToken(userId, result.token, 'web', { deviceName: navigator.userAgent.slice(0, 120) })
+      await registerDeviceToken(userId, result.token, 'web', {
+        deviceName: navigator.userAgent.slice(0, 120),
+        appVersion: 'notification-actions-v1',
+      })
       stopListeningRef.current = result.stopListening
       await getServiceWorkerStatus()
       setPermission(getPermission())

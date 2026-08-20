@@ -2,8 +2,13 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { importPKCS8, SignJWT } from 'npm:jose@5'
 import { recordOperationalError } from '../_shared/operationalErrors.ts'
 
-type Task = { id: string; user_id: string; title: string; notify_at: string }
-type DeviceToken = { id: string; platform: 'web' | 'ios' | 'android' | 'desktop'; token: string }
+type Task = { id: string; user_id: string; title: string; notify_at: string; notification_occurrence: number }
+type DeviceToken = {
+  id: string
+  platform: 'web' | 'ios' | 'android' | 'desktop'
+  token: string
+  app_version: string | null
+}
 type CurrentTaskState = { completed: boolean; notification_state: string }
 
 class UnregisteredFcmTokenError extends Error {}
@@ -13,6 +18,7 @@ const schedulerKey = Deno.env.get('NUDGE_SCHEDULER_KEY')
 const fcmProjectId = Deno.env.get('FCM_PROJECT_ID')
 const fcmClientEmail = Deno.env.get('FCM_CLIENT_EMAIL')
 const fcmPrivateKey = Deno.env.get('FCM_PRIVATE_KEY')?.replace(/\\n/g, '\n')
+const reminderActionSecret = Deno.env.get('NUDGEE_REMINDER_ACTION_SECRET')
 
 function getAdminKey() {
   const legacyKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -27,6 +33,33 @@ function getAdminKey() {
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function base64UrlEncode(value: string) {
+  return btoa(value).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+}
+
+async function createReminderActionToken(task: Task) {
+  if (!reminderActionSecret) throw new Error('NUDGEE_REMINDER_ACTION_SECRET is not configured.')
+  const payload = base64UrlEncode(JSON.stringify({
+    taskId: task.id,
+    userId: task.user_id,
+    occurrence: task.notification_occurrence,
+    exp: Math.floor(Date.now() / 1_000) + 7 * 24 * 60 * 60,
+  }))
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(reminderActionSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))
+  const signatureValue = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replaceAll('=', '')
+  return `${payload}.${signatureValue}`
 }
 
 function safeDeliveryErrorSummary(error: unknown) {
@@ -70,17 +103,38 @@ async function getFcmAccessToken() {
   return body.access_token
 }
 
-async function sendFcm(token: string, task: Task, platform: DeviceToken['platform'], accessToken: string) {
+async function sendFcm(device: DeviceToken, task: Task, accessToken: string) {
   if (!fcmProjectId) throw new Error('FCM_PROJECT_ID is not configured.')
+  const actionToken = await createReminderActionToken(task)
+  const interactiveActions = supportsInteractiveActions(device)
   const response = await fetch(`https://fcm.googleapis.com/v1/projects/${fcmProjectId}/messages:send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({
       message: {
-        token,
-        notification: { title: 'Nudgee reminder', body: task.title },
-        data: { taskId: task.id, title: task.title },
-        ...(platform === 'android' ? { android: { priority: 'high', notification: { channel_id: 'nudgee_reminders' } } } : {}),
+        token: device.token,
+        // Keep an FCM notification payload as the compatibility baseline. It
+        // is reliably displayed by Android and browsers even when the client
+        // process/service worker is not running. Action metadata remains in
+        // data for clients that are active and can handle it themselves.
+        // The compatibility notification is retained for every existing app
+        // install. Only freshly registered action-capable clients receive the
+        // data-only variant that their own notification renderer can enrich.
+        ...(!interactiveActions ? { notification: { title: 'Nudgee reminder', body: task.title } } : {}),
+        data: {
+          taskId: task.id,
+          title: task.title,
+          occurrence: String(task.notification_occurrence),
+          actionToken,
+        },
+        ...(device.platform === 'android'
+          ? interactiveActions
+            ? { android: { priority: 'high' } }
+            : { android: { priority: 'high', notification: { channel_id: 'nudgee_reminders' } } }
+          : {}),
+        ...(device.platform === 'web' && interactiveActions
+          ? { webpush: { headers: { Urgency: 'high' } } }
+          : {}),
       },
     }),
   })
@@ -91,6 +145,13 @@ async function sendFcm(token: string, task: Task, platform: DeviceToken['platfor
     }
     throw new Error(`FCM rejected the message (${response.status}): ${responseText.slice(0, 500)}`)
   }
+}
+
+function supportsInteractiveActions(device: DeviceToken) {
+  // Only clients that have explicitly re-registered with this capability get
+  // a data-only message. Older clients retain the FCM notification fallback.
+  return (device.platform === 'android' || device.platform === 'web') &&
+    device.app_version === 'notification-actions-v1'
 }
 
 async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken: string | null) {
@@ -107,7 +168,7 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
     return { taskId: task.id, failed: false }
   }
 
-  const { data, error } = await client.from('device_tokens').select('id, platform, token').eq('user_id', task.user_id).eq('is_active', true)
+  const { data, error } = await client.from('device_tokens').select('id, platform, token, app_version').eq('user_id', task.user_id).eq('is_active', true)
   if (error) throw error
   const devices = (data ?? []) as DeviceToken[]
   // A task can still be delivered to an actively running desktop through its
@@ -117,17 +178,17 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
   let failed = false
   const activeDeviceIds = new Set(devices.map(device => device.id))
   for (const device of devices) {
-    const { data: existingDelivery, error: existingError } = await client.from('notification_deliveries').select('id, status, attempt_count').eq('task_id', task.id).eq('device_token_id', device.id).eq('channel', device.platform).maybeSingle()
+    const { data: existingDelivery, error: existingError } = await client.from('notification_deliveries').select('id, status, attempt_count').eq('task_id', task.id).eq('device_token_id', device.id).eq('channel', device.platform).eq('occurrence', task.notification_occurrence).maybeSingle()
     if (existingError) { failed = true; continue }
     // A retry of a partially failed task must not resend to devices that
     // already acknowledged delivery successfully.
     if (existingDelivery?.status === 'sent') continue
-    const { data: delivery, error: deliveryError } = await client.from('notification_deliveries').upsert({ task_id: task.id, user_id: task.user_id, device_token_id: device.id, channel: device.platform, status: 'processing', attempt_count: 1, error_message: null }, { onConflict: 'task_id,device_token_id,channel' }).select('id').single()
+    const { data: delivery, error: deliveryError } = await client.from('notification_deliveries').upsert({ task_id: task.id, user_id: task.user_id, device_token_id: device.id, channel: device.platform, occurrence: task.notification_occurrence, status: 'processing', attempt_count: 1, error_message: null }, { onConflict: 'task_id,device_token_id,channel,occurrence' }).select('id').single()
     if (deliveryError) { failed = true; continue }
     try {
       if (device.platform !== 'web' && device.platform !== 'android') throw new Error(`${device.platform} delivery is not implemented yet.`)
       if (!accessToken) throw new Error('FCM access token is unavailable.')
-      await sendFcm(device.token, task, device.platform, accessToken)
+      await sendFcm(device, task, accessToken)
       await client.from('notification_deliveries').update({ status: 'sent', sent_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', delivery.id)
     } catch (caught) {
       const unregisteredToken = caught instanceof UnregisteredFcmTokenError
@@ -152,6 +213,7 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
       .from('notification_deliveries')
       .select('id', { count: 'exact', head: true })
       .eq('task_id', task.id)
+      .eq('occurrence', task.notification_occurrence)
       .in('device_token_id', remainingActiveDeviceIds)
       .in('status', ['pending', 'processing', 'failed'])
   await client.from('tasks').update({ notification_state: failed || (remainingFailures ?? 0) > 0 ? 'failed' : 'sent', updated_at: new Date().toISOString() }).eq('id', task.id).eq('notification_state', 'processing')
