@@ -16,6 +16,11 @@ val defaultRewardedAdUnitId = "ca-app-pub-3940256099942544/5224354917"
 val configuredRewardedAdUnitId = localProperties.getProperty("admob.rewardedAdUnitId").orEmpty()
 val rewardedAdUnitId = configuredRewardedAdUnitId.ifBlank { defaultRewardedAdUnitId }
 val adMobTestDeviceId = localProperty("admob.testDeviceId")
+val releaseStoreFile = localProperties.getProperty("release.storeFile").orEmpty()
+val releaseStorePassword = localProperties.getProperty("release.storePassword").orEmpty()
+val releaseKeyAlias = localProperties.getProperty("release.keyAlias").orEmpty()
+val releaseKeyPassword = localProperties.getProperty("release.keyPassword").orEmpty()
+val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all(String::isNotBlank)
 val isReleaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
     taskName.contains("release", ignoreCase = true)
 }
@@ -24,6 +29,13 @@ if (isReleaseBuildRequested && (configuredAdMobAppId.isBlank() || configuredRewa
     throw GradleException(
         "Release builds require admob.appId and admob.rewardedAdUnitId in local.properties. " +
             "Nudgee must never ship Google's sample AdMob IDs.",
+    )
+}
+
+if (isReleaseBuildRequested && !hasReleaseSigning) {
+    throw GradleException(
+        "Release builds require release.storeFile, release.storePassword, release.keyAlias, and release.keyPassword " +
+            "in local.properties.",
     )
 }
 
@@ -117,6 +129,23 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigning) {
+                storeFile = rootProject.file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     compileOptions {
