@@ -6,6 +6,7 @@ import { SettingsPage } from './features/settings/SettingsPage'
 import { CalendarPage } from './features/calendar/CalendarPage'
 import { PrivacyPolicyPage } from './features/legal/PrivacyPolicyPage'
 import { AccountDeletionPage } from './features/legal/AccountDeletionPage'
+import { AdminDashboardPage } from './features/admin/AdminDashboardPage'
 import { LoginScreen } from './features/auth/LoginScreen'
 import { useAuth } from './features/auth/useAuth'
 import { useEffect } from 'react'
@@ -25,6 +26,7 @@ function App() {
   if (route === routes.accountDeletion) return <AccountDeletionPage />
   if (isLoading) return <main className="app-shell"><p className="loading-message">Loading Nudgee…</p></main>
   if (!user) return <LoginScreen error={error} onSignIn={signIn} />
+  if (route === routes.admin) return <AdminDashboardPage />
   if (route === routes.notificationSettings) return <NotificationSettingsPage userId={user.id} />
   if (route === routes.settings) return <SettingsPage user={user} onSignOut={signOut} onDeleteAccount={deleteAccount} />
   if (route === routes.calendar) return <CalendarPage user={user} />
