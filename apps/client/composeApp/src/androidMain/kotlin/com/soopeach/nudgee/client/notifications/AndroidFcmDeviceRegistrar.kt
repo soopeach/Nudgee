@@ -36,7 +36,9 @@ object AndroidFcmDeviceRegistrar {
                 put("p_platform", "android")
                 put("p_token", token)
                 put("p_device_name", "${Build.MANUFACTURER} ${Build.MODEL}".take(120))
-                put("p_app_version", BuildConfig.VERSION_NAME)
+                // This capability marker lets the server safely choose the
+                // data-only message needed for native notification actions.
+                put("p_app_version", "notification-actions-v1")
             },
         )
         Log.i(TAG, "FCM token registered for the signed-in Android device.")

@@ -27,6 +27,8 @@ class NudgeeFirebaseMessagingService : FirebaseMessagingService() {
             context = this,
             title = message.notification?.title ?: "Nudgee reminder",
             body = message.notification?.body ?: message.data["title"] ?: "You have a reminder.",
+            taskId = message.data["taskId"],
+            actionToken = message.data["actionToken"],
         )
     }
 
@@ -47,23 +49,61 @@ object NudgeeNotificationPresenter {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    fun show(context: Context, title: String, body: String) {
+    fun show(
+        context: Context,
+        title: String,
+        body: String,
+        taskId: String? = null,
+        actionToken: String? = null,
+    ) {
         ensureChannel(context)
+        val notificationId = ("$taskId:$actionToken".hashCode() and Int.MAX_VALUE)
         val intent = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pendingIntent = PendingIntent.getActivity(
             context,
-            0,
+            notificationId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val notification = android.app.Notification.Builder(context, CHANNEL_ID)
+        val builder = android.app.Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
             .setContentTitle(title)
             .setContentText(body)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .build()
+        if (!taskId.isNullOrBlank() && !actionToken.isNullOrBlank()) {
+            builder
+                .addAction(
+                    android.R.drawable.ic_popup_sync,
+                    "Snooze 10m",
+                    reminderActionPendingIntent(context, notificationId, taskId, actionToken, NudgeeReminderActionReceiver.ACTION_SNOOZE),
+                )
+                .addAction(
+                    android.R.drawable.checkbox_on_background,
+                    "Complete",
+                    reminderActionPendingIntent(context, notificationId, taskId, actionToken, NudgeeReminderActionReceiver.ACTION_COMPLETE),
+                )
+        }
+        val notification = builder.build()
         context.getSystemService(NotificationManager::class.java)
-            .notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+            .notify(notificationId, notification)
     }
+
+    private fun reminderActionPendingIntent(
+        context: Context,
+        notificationId: Int,
+        taskId: String,
+        actionToken: String,
+        action: String,
+    ): PendingIntent = PendingIntent.getBroadcast(
+        context,
+        "$notificationId:$action".hashCode(),
+        Intent(context, NudgeeReminderActionReceiver::class.java).apply {
+            this.action = action
+            putExtra(NudgeeReminderActionReceiver.EXTRA_TASK_ID, taskId)
+            putExtra(NudgeeReminderActionReceiver.EXTRA_ACTION_TOKEN, actionToken)
+            putExtra(NudgeeReminderActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 }
