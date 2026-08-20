@@ -8,6 +8,7 @@ const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY
 const webInstallationIdKey = 'nudgee.web-installation-id'
 const registrationCacheKey = 'nudgee.web-token-registration'
 const registrationCacheTtlMs = 60 * 60 * 1000
+const notificationActionCapabilityVersion = 'notification-actions-v1'
 
 function detectPlatform(): DevicePlatform {
   // Native clients will call registerDeviceToken with their explicit platform.
@@ -56,6 +57,7 @@ export async function registerCurrentDevice(userId: string) {
 
   await registerDeviceToken(userId, token, platform, {
     deviceName: navigator.userAgent.slice(0, 120),
+    appVersion: notificationActionCapabilityVersion,
     installationId,
   })
   rememberRegistration(userId, token, installationId)
@@ -87,7 +89,13 @@ function createWebInstallationId(): string {
   })
 }
 
-type RegistrationCache = { userId: string; token: string; installationId?: string; registeredAt: number }
+type RegistrationCache = {
+  userId: string
+  token: string
+  installationId?: string
+  capabilityVersion?: string
+  registeredAt: number
+}
 
 function hasRecentRegistration(userId: string, token: string, installationId?: string): boolean {
   try {
@@ -95,6 +103,7 @@ function hasRecentRegistration(userId: string, token: string, installationId?: s
     return cached?.userId === userId &&
       cached.token === token &&
       cached.installationId === installationId &&
+      cached.capabilityVersion === notificationActionCapabilityVersion &&
       Date.now() - cached.registeredAt < registrationCacheTtlMs
   } catch {
     return false
@@ -103,7 +112,13 @@ function hasRecentRegistration(userId: string, token: string, installationId?: s
 
 function rememberRegistration(userId: string, token: string, installationId?: string) {
   try {
-    const cache: RegistrationCache = { userId, token, installationId, registeredAt: Date.now() }
+    const cache: RegistrationCache = {
+      userId,
+      token,
+      installationId,
+      capabilityVersion: notificationActionCapabilityVersion,
+      registeredAt: Date.now(),
+    }
     window.localStorage.setItem(registrationCacheKey, JSON.stringify(cache))
   } catch {
     // Storage is optional; the RPC remains the server-side source of truth.

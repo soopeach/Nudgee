@@ -13,6 +13,11 @@ export type ServiceWorkerStatus = {
   state: string
 }
 
+type ActionableNotificationOptions = NotificationOptions & {
+  renotify?: boolean
+  actions?: Array<{ action: string; title: string; icon?: string }>
+}
+
 export async function startFcmTest(onForegroundMessage: (message: string) => void): Promise<FcmTestResult> {
   if (!isFirebaseConfigured) {
     throw new Error('Firebase configuration is incomplete. Check your VITE_FIREBASE_* values and restart Vite.')
@@ -44,12 +49,25 @@ export async function startFcmTest(onForegroundMessage: (message: string) => voi
   }
 
   const stopListening = onMessage(messaging, (payload) => {
-    const title = payload.notification?.title ?? 'Nudgee test message'
-    const body = payload.notification?.body ?? 'Message received while this page is open.'
+    const title = payload.notification?.title ?? 'Nudgee reminder'
+    const body = payload.notification?.body ?? payload.data?.title ?? 'You have a reminder.'
     // FCM does not automatically display a native notification while the page
     // is in the foreground, so the app owns that presentation path.
     if (Notification.permission === 'granted') {
-      new Notification(title, { body })
+      const data = payload.data ?? {}
+      const options: ActionableNotificationOptions = {
+        body,
+        data,
+        tag: data.taskId ? `nudgee:${data.taskId}:${data.occurrence ?? '0'}` : undefined,
+        renotify: true,
+      }
+      if (data.actionToken) {
+        options.actions = [
+          { action: 'snooze', title: 'Snooze 10m' },
+          { action: 'complete', title: 'Complete' },
+        ]
+      }
+      void serviceWorkerRegistration.showNotification(title, options)
     }
     onForegroundMessage(`${title}: ${body}`)
   })
