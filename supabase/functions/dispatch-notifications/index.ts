@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { importPKCS8, SignJWT } from 'npm:jose@5'
+import { recordOperationalError } from '../_shared/operationalErrors.ts'
 
 type Task = { id: string; user_id: string; title: string; notify_at: string }
 type DeviceToken = { id: string; platform: 'web' | 'ios' | 'android' | 'desktop'; token: string }
@@ -26,6 +27,26 @@ function getAdminKey() {
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function safeDeliveryErrorSummary(error: unknown) {
+  if (error instanceof UnregisteredFcmTokenError) return 'FCM registration is no longer valid.'
+  if (error instanceof Error && error.message.includes('delivery is not implemented')) return error.message
+  return 'Notification delivery failed.'
+}
+
+function safeSchedulerErrorSummary(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).replace(/[\r\n\t]+/g, ' ').slice(0, 500)
+}
+
+async function finishSchedulerRun(client: SupabaseClient<any>, runId: string, status: 'succeeded' | 'failed', claimedTasks: number, failedTasks: number, error?: unknown) {
+  await client.from('notification_scheduler_runs').update({
+    status,
+    finished_at: new Date().toISOString(),
+    claimed_tasks: claimedTasks,
+    failed_tasks: failedTasks,
+    error_message: error ? safeSchedulerErrorSummary(error) : null,
+  }).eq('id', runId)
 }
 
 async function getFcmAccessToken() {
@@ -121,6 +142,7 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
         failed = true
       }
       await client.from('notification_deliveries').update({ status: 'failed', failed_at: new Date().toISOString(), error_message: caught instanceof Error ? caught.message : 'Unknown delivery error', updated_at: new Date().toISOString() }).eq('id', delivery.id)
+      await recordOperationalError(client, 'notification_dispatch', 'delivery_failed', safeDeliveryErrorSummary(caught), { platform: device.platform, unregisteredToken })
     }
   }
   const remainingActiveDeviceIds = [...activeDeviceIds]
@@ -139,17 +161,31 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
 async function markTaskFailed(client: SupabaseClient<any>, taskId: string, error: unknown) {
   await client.from('tasks').update({ notification_state: 'failed', updated_at: new Date().toISOString() }).eq('id', taskId).eq('notification_state', 'processing')
   console.error('Task dispatch failed', { taskId, error: error instanceof Error ? error.message : error })
+  await recordOperationalError(client, 'notification_dispatch', 'task_dispatch_failed', 'Task dispatch failed.')
 }
 
 Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
   if (!schedulerKey || request.headers.get('x-nudgee-cron-secret') !== schedulerKey) return json({ error: 'Unauthorized' }, 401)
   if (!supabaseUrl) return json({ error: 'SUPABASE_URL is not configured' }, 500)
+  let client: SupabaseClient<any> | null = null
+  let runId: string | null = null
+  let claimedTaskCount = 0
+  let failedTaskCount = 0
   try {
-    const client = createClient(supabaseUrl, getAdminKey())
+    client = createClient(supabaseUrl, getAdminKey())
+    const { data: schedulerRun, error: schedulerRunError } = await client
+      .from('notification_scheduler_runs')
+      .insert({ status: 'running' })
+      .select('id')
+      .single()
+    if (schedulerRunError || !schedulerRun) throw schedulerRunError ?? new Error('Could not create scheduler run.')
+    runId = schedulerRun.id
+    await client.from('notification_scheduler_runs').delete().lt('started_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000).toISOString())
     const { data, error } = await client.rpc('claim_due_tasks', { p_limit: 50 })
     if (error) throw error
     const tasks = (data ?? []) as Task[]
+    claimedTaskCount = tasks.length
     let accessToken: string | null = null
     try {
       accessToken = tasks.length > 0 ? await getFcmAccessToken() : null
@@ -166,9 +202,13 @@ Deno.serve(async (request) => {
         results.push({ taskId: task.id, failed: true })
       }
     }
+    failedTaskCount = results.filter((result) => result.failed).length
+    await finishSchedulerRun(client, runId, 'succeeded', claimedTaskCount, failedTaskCount)
     return json({ ok: true, claimed: tasks.length, results })
   } catch (caught) {
+    if (client && runId) await finishSchedulerRun(client, runId, 'failed', claimedTaskCount, failedTaskCount, caught)
     console.error(caught)
+    if (client) await recordOperationalError(client, 'notification_dispatch', 'scheduler_run_failed', 'Notification scheduler run failed.')
     return json({ ok: false, error: caught instanceof Error ? caught.message : 'Dispatch failed.' }, 500)
   }
 })
