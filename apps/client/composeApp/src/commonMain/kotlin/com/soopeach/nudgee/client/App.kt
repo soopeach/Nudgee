@@ -15,6 +15,7 @@ import com.soopeach.nudgee.client.data.tasks.SupabaseTaskRepository
 import com.soopeach.nudgee.client.ui.auth.LoginScreen
 import com.soopeach.nudgee.client.ui.shell.AuthenticatedNudgeeScreen
 import com.soopeach.nudgee.client.ui.startup.NudgeeStartupScreen
+import com.soopeach.nudgee.client.ui.notifications.NotificationPermissionPrompt
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.status.SessionStatus
@@ -79,6 +80,7 @@ fun App() {
                     }
                 },
             )
+            NotificationPermissionPrompt()
             }
             else -> {
             LoginScreen(
