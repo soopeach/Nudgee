@@ -267,6 +267,15 @@ fun SettingsScreen(
                 Text("Buy me a coffee and help Nudgee grow.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
             }
         }
+        item {
+            SettingsCard(
+                title = "Privacy Policy",
+                accent = NudgeeColors.sky,
+                onClick = { uriHandler.openUri("https://nudgee-sage.vercel.app/privacy") },
+            ) {
+                Text("Learn how Nudgee handles your information.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
+            }
+        }
     }
 }
 
@@ -286,31 +295,21 @@ private fun AiReminderUsageCard(
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (usage.bonusCredits > 0) {
-                    Text(
-                        "${usage.bonusCredits} reward credit${if (usage.bonusCredits == 1) "" else "s"} ready to use",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = NudgeeColors.ink,
-                    )
-                    Text(
-                        "Your ${usage.dailyFreeParseLimit} free AI reminders refresh at local midnight.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NudgeeColors.mutedInk,
-                    )
-                } else {
-                    Text(
-                        "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used today",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = NudgeeColors.ink,
-                    )
-                    Text(
-                        "Up to ${usage.dailyFreeParseLimit} are free each day. Your allowance resets at local midnight.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NudgeeColors.mutedInk,
-                    )
-                }
+                Text(
+                    "${usage.remainingFreeParses} of ${usage.dailyFreeParseLimit} free reminders left today",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = NudgeeColors.ink,
+                )
+                Text(
+                    if (usage.bonusCredits > 0) {
+                        "${usage.bonusCredits} reward credit${if (usage.bonusCredits == 1) "" else "s"} ready too · resets at local midnight."
+                    } else {
+                        "Your free allowance resets at local midnight."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NudgeeColors.mutedInk,
+                )
             }
             if (usage.remainingFreeParses == 0 && rewardedAdController != null) {
                 Spacer(Modifier.height(14.dp))

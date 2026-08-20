@@ -4,6 +4,8 @@ import { useRoute } from './features/navigation/useRoute'
 import { TodoPage } from './features/todos/TodoPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { CalendarPage } from './features/calendar/CalendarPage'
+import { PrivacyPolicyPage } from './features/legal/PrivacyPolicyPage'
+import { AccountDeletionPage } from './features/legal/AccountDeletionPage'
 import { LoginScreen } from './features/auth/LoginScreen'
 import { useAuth } from './features/auth/useAuth'
 import { useEffect } from 'react'
@@ -19,6 +21,8 @@ function App() {
     window.history.pushState({}, '', routes.notificationSettings)
     window.dispatchEvent(new PopStateEvent('popstate'))
   }, [route, user])
+  if (route === routes.privacy) return <PrivacyPolicyPage />
+  if (route === routes.accountDeletion) return <AccountDeletionPage />
   if (isLoading) return <main className="app-shell"><p className="loading-message">Loading Nudgee…</p></main>
   if (!user) return <LoginScreen error={error} onSignIn={signIn} />
   if (route === routes.notificationSettings) return <NotificationSettingsPage userId={user.id} />

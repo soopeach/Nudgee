@@ -16,7 +16,7 @@ export function LoginScreen({ error, onSignIn }: LoginScreenProps) {
           Continue with Google
         </button>
         {error && <p className="auth-error" role="alert">{error}</p>}
-        <small>By continuing, you agree to keep things delightfully organised.</small>
+        <small>By continuing, you agree to keep things delightfully organised. Read our <a href="/privacy">Privacy Policy</a>.</small>
       </section>
     </main>
   )
