@@ -926,16 +926,26 @@ private fun ParseUsageCard(usage: ReminderParseUsage) {
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             if (usage.bonusCredits > 0) {
-                Text("Reward credits", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
                 Text(
-                    "${usage.bonusCredits} ready · ${usage.dailyFreeParseLimit} free daily reminders reset at midnight",
+                    "${usage.remainingFreeParses} of ${usage.dailyFreeParseLimit} free left today",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = NudgeeColors.ink,
+                )
+                Text(
+                    "${usage.bonusCredits} reward credits ready · resets at local midnight",
                     style = MaterialTheme.typography.bodySmall,
                     color = NudgeeColors.mutedInk,
                 )
             } else {
-                Text("Today’s AI reminders", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
                 Text(
-                    "${usage.usedFreeParses} of ${usage.dailyFreeParseLimit} free parses used · resets at local midnight",
+                    "${usage.remainingFreeParses} of ${usage.dailyFreeParseLimit} free left today",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = NudgeeColors.ink,
+                )
+                Text(
+                    "Resets at local midnight",
                     style = MaterialTheme.typography.bodySmall,
                     color = NudgeeColors.mutedInk,
                 )
