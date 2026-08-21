@@ -17,6 +17,7 @@ data class ParsedReminderDraft(
     val needsClarification: Boolean,
     val clarification: String?,
     val clarificationType: ClarificationType? = null,
+    val suggestedTime: String? = null,
     val remainingFreeParses: Int? = null,
     val bonusCredits: Int? = null,
 )
@@ -79,6 +80,7 @@ class SupabaseEdgeFunctionReminderParser(
                 parsed.clarification
             },
             clarificationType = if (hasUnsupportedRecurrence) ClarificationType.Recurrence else parsed.clarificationType?.toClarificationType(),
+            suggestedTime = parsed.suggestedTime,
             remainingFreeParses = parsed.remainingFreeParses,
             bonusCredits = parsed.bonusCredits,
         )
@@ -140,6 +142,7 @@ private data class ParseReminderResponse(
     val needsClarification: Boolean = false,
     val clarification: String? = null,
     val clarificationType: String? = null,
+    val suggestedTime: String? = null,
     val remainingFreeParses: Int? = null,
     val bonusCredits: Int? = null,
 )

@@ -115,12 +115,21 @@ export function rollRecurringReminderForward(result, timezone, now = new Date())
 }
 
 function hasUnqualifiedKoreanHour(text) {
+  return unqualifiedKoreanHour(text) !== null
+}
+
+function unqualifiedKoreanHour(text) {
   const matcher = /(?:^|\s)([1-9]|1[0-2])\s*시(?=\s|$|[에쯤])/g
   for (const match of text.matchAll(matcher)) {
     const prefix = text.slice(Math.max(0, match.index - 8), match.index)
-    if (!/(오전|오후|아침|낮|저녁|밤)\s*$/u.test(prefix)) return true
+    if (!/(오전|오후|아침|낮|저녁|밤)\s*$/u.test(prefix)) return Number(match[1])
   }
-  return false
+  return null
+}
+
+function unqualifiedEnglishHour(text) {
+  const match = /\bat\s+([1-9]|1[0-2])\b(?!\s*(?:am|pm)\b)|\b([1-9]|1[0-2])\s*o['’]?clock\b(?!\s*(?:am|pm)\b)/iu.exec(text)
+  return match ? Number(match[1] ?? match[2]) : null
 }
 
 /**
@@ -129,12 +138,13 @@ function hasUnqualifiedKoreanHour(text) {
  * AM/PM guess from reaching a client if the model overlooks that instruction.
  */
 export function requireMeridiemClarification(result, text) {
-  const hasUnqualifiedEnglishHour = /\bat\s+(?:[1-9]|1[0-2])\b(?!\s*(?:am|pm)\b)|\b(?:[1-9]|1[0-2])\s*o['’]?clock\b(?!\s*(?:am|pm)\b)/iu.test(text)
-  if (!hasUnqualifiedEnglishHour && !hasUnqualifiedKoreanHour(text)) return result
+  const hour = unqualifiedEnglishHour(text) ?? unqualifiedKoreanHour(text)
+  if (hour === null) return result
 
   return {
     ...result,
     notifyAt: null,
+    suggestedTime: `${String(hour).padStart(2, '0')}:00`,
     needsClarification: true,
     clarificationType: 'time',
     clarification: 'Is that in the morning or evening? Choose the exact date and time below.',
@@ -161,6 +171,9 @@ export function validateParsedReminder(result, now = new Date()) {
     : needsClarification
       ? requestedClarificationType ?? (notifyAt ? 'recurrence' : 'time')
       : null
+  const suggestedTime = typeof result.suggestedTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(result.suggestedTime)
+    ? result.suggestedTime
+    : null
 
   if (!title) throw new Error('What should Nudgee remind you about? Try “Take vitamins every day at 9am.”')
   if (!needsClarification && new Date(notifyAt).getTime() <= now.getTime()) {
@@ -176,5 +189,6 @@ export function validateParsedReminder(result, now = new Date()) {
       ? 'Nudgee currently supports every day, every weekday, every weekend, or every week. Choose one below.'
       : clarification,
     clarificationType,
+    suggestedTime,
   }
 }

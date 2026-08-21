@@ -7,6 +7,7 @@ export type ParsedReminder = {
   needsClarification: boolean
   clarification: string | null
   clarificationType: 'time' | 'recurrence' | null
+  suggestedTime: string | null
 }
 
 const supportedRecurrenceRules = new Set([
@@ -57,6 +58,9 @@ function readParsedReminder(value: unknown): ParsedReminder {
       ? 'Nudgee currently supports every day, every weekday, every weekend, or every week. Choose one below.'
       : typeof parsed.clarification === 'string' ? parsed.clarification : null,
     clarificationType,
+    suggestedTime: typeof parsed.suggestedTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(parsed.suggestedTime)
+      ? parsed.suggestedTime
+      : null,
   }
 }
 

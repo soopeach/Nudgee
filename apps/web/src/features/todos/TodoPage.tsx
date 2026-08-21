@@ -20,6 +20,15 @@ import { filterTodosByPeriod } from './taskPeriod'
 type TodoPageProps = { user: AuthenticatedUser; onSignOut: () => Promise<void> }
 type ManualFocusTarget = 'time' | 'recurrence' | null
 
+function dateTimeForSuggestedTime(time: string) {
+  const [hour, minute] = time.split(':').map(Number)
+  const candidate = new Date()
+  candidate.setSeconds(0, 0)
+  candidate.setHours(hour, minute, 0, 0)
+  if (candidate <= new Date()) candidate.setDate(candidate.getDate() + 1)
+  return formatLocalDateTime(candidate)
+}
+
 function formatNotifyAt(value: string) {
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(value))
 }
@@ -133,6 +142,7 @@ export function TodoPage({ user, onSignOut }: TodoPageProps) {
     if (!parsedReminder) return
     setTitle(parsedReminder.title)
     if (parsedReminder.notifyAt) setNotifyAt(formatLocalDateTime(new Date(parsedReminder.notifyAt)))
+    else if (parsedReminder.suggestedTime) setNotifyAt(dateTimeForSuggestedTime(parsedReminder.suggestedTime))
     setRecurrenceRule(parsedReminder.recurrenceRule as RecurrenceRule)
     setManualFocusTarget(parsedReminder.clarificationType === 'recurrence' ? 'recurrence' : parsedReminder.clarificationType === 'time' ? 'time' : null)
     setShowManualEntry(true)

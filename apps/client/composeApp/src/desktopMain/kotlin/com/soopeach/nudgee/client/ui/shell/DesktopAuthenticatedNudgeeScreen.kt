@@ -614,6 +614,7 @@ private fun DesktopTaskComposerDialog(
                     date = it.date
                     time = it.time
                 }
+                if (details == null) time = draft.suggestedTime ?: time
                 recurrence = TaskRecurrence.fromRule(draft.recurrenceRule)
                 manualFocusTarget = when (draft.clarificationType) {
                     ClarificationType.Time -> DesktopManualFocusTarget.Time

@@ -273,6 +273,7 @@ private class QuickAddViewModel(
             it.copy(
                 mode = ReminderInputMode.Manual,
                 manualTitle = draft.title,
+                manualTime = draft.suggestedTime ?: it.manualTime,
                 manualRecurrence = TaskRecurrence.fromRule(draft.recurrenceRule),
                 manualFocusTarget = when (draft.clarificationType) {
                     ClarificationType.Time -> ManualFocusTarget.Time
