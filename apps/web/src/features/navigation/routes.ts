@@ -4,6 +4,7 @@ export const routes = {
   accountDeletion: '/delete-account',
   calendar: '/calendar',
   settings: '/settings',
+  repeatingReminders: '/repeating-reminders',
   notificationSettings: '/notification-settings',
   admin: '/admin',
 } as const
@@ -15,6 +16,7 @@ export function getCurrentRoute(): AppRoute {
   if (window.location.pathname === routes.accountDeletion) return routes.accountDeletion
   if (window.location.pathname === routes.calendar) return routes.calendar
   if (window.location.pathname === routes.settings) return routes.settings
+  if (window.location.pathname === routes.repeatingReminders) return routes.repeatingReminders
   if (window.location.pathname === routes.notificationSettings) return routes.notificationSettings
   if (window.location.pathname === routes.admin) return routes.admin
   return routes.home

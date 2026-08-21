@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ParsedReminder } from './naturalLanguageService'
+import { recurrenceLabel } from './recurrence'
 
 type ParsingReminderDialogProps = {
   prompt: string
@@ -49,6 +50,8 @@ export function NaturalLanguageReminderDialog({
 }: NaturalLanguageReminderDialogProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const needsTime = parsedReminder.needsClarification || !parsedReminder.notifyAt
+  const needsRecurrence = parsedReminder.clarificationType === 'recurrence'
+  const clarificationTitle = needsRecurrence ? 'Which repeat pattern should Nudgee use?' : 'When should Nudgee remind you?'
 
   useEffect(() => { closeButtonRef.current?.focus() }, [])
 
@@ -57,16 +60,17 @@ export function NaturalLanguageReminderDialog({
       <section className="natural-language-dialog" role="dialog" aria-modal="true" aria-labelledby="natural-language-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="natural-dialog-icon" aria-hidden="true">✦</div>
         <p className="dialog-eyebrow">{needsTime ? 'ONE MORE DETAIL' : 'READY TO SCHEDULE'}</p>
-        <h2 id="natural-language-dialog-title">{needsTime ? 'When should Nudgee remind you?' : 'Ready to schedule?'}</h2>
+        <h2 id="natural-language-dialog-title">{needsTime ? clarificationTitle : 'Ready to schedule?'}</h2>
         <p>{needsTime ? (parsedReminder.clarification || 'Choose a date and time before creating this reminder.') : 'Please check the details before Nudgee saves it.'}</p>
+        {needsTime && <p className="parsed-prompt">This request already used one AI credit. Continue manually to finish it without using another.</p>}
         <div className="parsed-reminder-card">
           <strong>{parsedReminder.title}</strong>
-          {parsedReminder.notifyAt ? <time dateTime={parsedReminder.notifyAt}>Nudge · {formatReminderTime(parsedReminder.notifyAt)}</time> : <span>Reminder time still needed</span>}
+          {parsedReminder.notifyAt ? <time dateTime={parsedReminder.notifyAt}>Nudge · {formatReminderTime(parsedReminder.notifyAt)}{recurrenceLabel(parsedReminder.recurrenceRule) ? ` · ${recurrenceLabel(parsedReminder.recurrenceRule)}` : ''}</time> : <span>Reminder time still needed</span>}
         </div>
         <small className="parsed-prompt">From: “{prompt}”</small>
         <div className="dialog-actions natural-dialog-actions">
-          <button ref={closeButtonRef} className="dialog-cancel" type="button" disabled={isSaving} onClick={onClose}>{needsTime ? 'Keep editing' : 'Not now'}</button>
-          <button className="dialog-primary" type="button" disabled={isSaving} onClick={needsTime ? onEditDetails : onSchedule}>{isSaving ? 'Scheduling…' : needsTime ? 'Set reminder time' : 'Schedule'}</button>
+          <button ref={closeButtonRef} className="dialog-cancel" type="button" disabled={isSaving} onClick={onClose}>Not now</button>
+          <button className="dialog-primary" type="button" disabled={isSaving} onClick={needsTime ? onEditDetails : onSchedule}>{isSaving ? 'Scheduling…' : needsTime ? needsRecurrence ? 'Choose repeat' : 'Set reminder time' : 'Schedule'}</button>
         </div>
         {!needsTime && <button className="dialog-text-action" type="button" disabled={isSaving} onClick={onEditDetails}>Edit details</button>}
       </section>

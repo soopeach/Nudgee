@@ -3,9 +3,18 @@ import { supabase } from '../../lib/supabase'
 export type ParsedReminder = {
   title: string
   notifyAt: string | null
+  recurrenceRule: string | null
   needsClarification: boolean
   clarification: string | null
+  clarificationType: 'time' | 'recurrence' | null
 }
+
+const supportedRecurrenceRules = new Set([
+  'FREQ=DAILY',
+  'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
+  'FREQ=WEEKLY;BYDAY=SA,SU',
+  'FREQ=WEEKLY',
+])
 
 export type ReminderParseUsage = {
   usedFreeParses: number
@@ -19,11 +28,21 @@ function readParsedReminder(value: unknown): ParsedReminder {
   const parsed = value as Record<string, unknown>
   if (typeof parsed.title !== 'string' || !parsed.title.trim()) throw new Error('Nudgee could not find a task in that reminder.')
   const notifyAt = typeof parsed.notifyAt === 'string' && !Number.isNaN(Date.parse(parsed.notifyAt)) ? parsed.notifyAt : null
+  const requestedRule = typeof parsed.recurrenceRule === 'string' ? parsed.recurrenceRule : null
+  const recurrenceRule = requestedRule && supportedRecurrenceRules.has(requestedRule) ? requestedRule : null
+  const hasUnsupportedRecurrence = requestedRule !== null && recurrenceRule === null
+  const clarificationType = parsed.clarificationType === 'recurrence' || parsed.clarificationType === 'time'
+    ? parsed.clarificationType
+    : hasUnsupportedRecurrence ? 'recurrence' : !notifyAt ? 'time' : null
   return {
     title: parsed.title.trim(),
     notifyAt,
-    needsClarification: parsed.needsClarification === true,
-    clarification: typeof parsed.clarification === 'string' ? parsed.clarification : null,
+    recurrenceRule,
+    needsClarification: parsed.needsClarification === true || hasUnsupportedRecurrence,
+    clarification: hasUnsupportedRecurrence
+      ? 'Nudgee currently supports every day, every weekday, every weekend, or every week. Choose one below.'
+      : typeof parsed.clarification === 'string' ? parsed.clarification : null,
+    clarificationType,
   }
 }
 

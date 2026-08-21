@@ -76,6 +76,8 @@ export function SettingsPage({ user, onSignOut, onDeleteAccount }: SettingsPageP
 
         <section className="settings-group" aria-labelledby="delivery-settings-title"><div className="settings-group-title"><span className="eyebrow">Delivery</span><h2 id="delivery-settings-title">Notifications</h2></div><NotificationDeliverySettings userId={user.id} compact /></section>
 
+        <section className="settings-group" aria-labelledby="planning-settings-title"><div className="settings-group-title"><span className="eyebrow">Planning</span><h2 id="planning-settings-title">Repeating reminders</h2></div><button className="settings-navigation-row" type="button" onClick={() => navigateTo(routes.repeatingReminders)}><span className="settings-row-icon" aria-hidden="true">↻</span><span><strong>Manage repeating reminders</strong><small>Edit the rhythm, skip one occurrence, or stop future reminders.</small></span><b>›</b></button></section>
+
         <section className="settings-group settings-support-group" aria-labelledby="support-settings-title">
           <div className="settings-group-title"><span className="eyebrow">Support</span><h2 id="support-settings-title">Keep Nudgee growing</h2></div>
           <a className="settings-navigation-row" href="https://buymeacoffee.com/hsjeon584z" target="_blank" rel="noreferrer"><span className="settings-row-icon" aria-hidden="true">♡</span><span><strong>Buy me a coffee</strong><small>Support the little nudges</small></span><b>↗</b></a>

@@ -2,6 +2,7 @@ import { NotificationSettingsPage } from './features/fcm/NotificationSettingsPag
 import { routes } from './features/navigation/routes'
 import { useRoute } from './features/navigation/useRoute'
 import { TodoPage } from './features/todos/TodoPage'
+import { RecurringRemindersPage } from './features/todos/RecurringRemindersPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { CalendarPage } from './features/calendar/CalendarPage'
 import { PrivacyPolicyPage } from './features/legal/PrivacyPolicyPage'
@@ -43,6 +44,7 @@ function App() {
           : route === routes.admin ? <AdminDashboardPage />
             : route === routes.notificationSettings ? <NotificationSettingsPage userId={user.id} />
               : route === routes.settings ? <SettingsPage user={user} onSignOut={signOut} onDeleteAccount={deleteAccount} />
+                : route === routes.repeatingReminders ? <RecurringRemindersPage user={user} />
                 : route === routes.calendar ? <CalendarPage user={user} />
                   : <TodoPage user={user} onSignOut={signOut} />
 

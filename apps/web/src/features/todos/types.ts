@@ -4,4 +4,5 @@ export type Todo = {
   notifyAt: string
   completed: boolean
   completedAt: string | null
+  recurrenceRule: string | null
 }

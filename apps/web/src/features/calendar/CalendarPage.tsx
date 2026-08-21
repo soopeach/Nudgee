@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AuthenticatedUser } from '../auth/types'
 import { navigateTo, routes } from '../navigation/routes'
 import { MobileBottomNavigation } from '../navigation/MobileBottomNavigation'
@@ -34,11 +34,12 @@ function formatDayHeading(value: Date) {
 type CalendarPageProps = { user: AuthenticatedUser }
 
 export function CalendarPage({ user }: CalendarPageProps) {
-  const { todos, isLoading, error, toggleTodo, deleteTodo, updateTodo } = useTodos(user.id)
+  const { todos, isLoading, error, toggleTodo, deleteTodo, skipRecurringOccurrence, stopRecurringReminder, updateTodo } = useTodos(user.id)
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
   const [selectedDateKey, setSelectedDateKey] = useState(() => toDateKey(new Date()))
   const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null)
   const [todoPendingDeletion, setTodoPendingDeletion] = useState<Todo | null>(null)
+  const [message, setMessage] = useState('')
   const todayKey = toDateKey(new Date())
   const calendarDays = useMemo(() => monthDays(visibleMonth), [visibleMonth])
   const selectedDate = new Date(`${selectedDateKey}T00:00:00`)
@@ -48,6 +49,12 @@ export function CalendarPage({ user }: CalendarPageProps) {
     grouped[key] = [...(grouped[key] ?? []), todo]
     return grouped
   }, {}), [todos])
+
+  useEffect(() => {
+    if (!message) return
+    const timeoutId = window.setTimeout(() => setMessage(''), 2800)
+    return () => window.clearTimeout(timeoutId)
+  }, [message])
 
   function moveMonth(offset: number) {
     const nextMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + offset, 1)
@@ -62,8 +69,29 @@ export function CalendarPage({ user }: CalendarPageProps) {
 
   async function confirmDelete() {
     if (!todoPendingDeletion) return
-    await deleteTodo(todoPendingDeletion.id)
-    setTodoPendingDeletion(null)
+    try {
+      if (todoPendingDeletion.recurrenceRule) {
+        await skipRecurringOccurrence(todoPendingDeletion.id)
+        setMessage('This occurrence was skipped. The next one stays scheduled.')
+      } else {
+        await deleteTodo(todoPendingDeletion.id)
+        setMessage('Task removed.')
+      }
+      setTodoPendingDeletion(null)
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : 'Task could not be deleted.')
+    }
+  }
+
+  async function confirmStopFutureReminders() {
+    if (!todoPendingDeletion) return
+    try {
+      await stopRecurringReminder(todoPendingDeletion.id)
+      setMessage('Future repeating reminders stopped.')
+      setTodoPendingDeletion(null)
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : 'Future reminders could not be stopped.')
+    }
   }
 
   return (
@@ -85,10 +113,11 @@ export function CalendarPage({ user }: CalendarPageProps) {
 
         <section className="calendar-day-tasks" aria-labelledby="calendar-day-title"><div className="calendar-day-heading"><div><span className="eyebrow">Selected day</span><h2 id="calendar-day-title">{formatDayHeading(selectedDate)}</h2></div><span>{selectedTodos.length} {selectedTodos.length === 1 ? 'task' : 'tasks'}</span></div>{isLoading ? <p className="calendar-empty-copy">Loading your rhythm…</p> : selectedTodos.length === 0 ? <p className="calendar-empty-copy">Nothing scheduled here yet. A calm little pocket of time.</p> : <ul className="calendar-task-list">{selectedTodos.map((todo) => <li className={todo.completed ? 'calendar-task-row completed' : 'calendar-task-row'} key={todo.id}><button className="calendar-check-button" type="button" aria-label={`${todo.completed ? 'Reopen' : 'Complete'} ${todo.title}`} onClick={() => void toggleTodo(todo.id)}><TaskStatusMark completed={todo.completed} /></button><button className="calendar-task-card" type="button" onClick={() => setSelectedTodo(todo)}><span><strong>{todo.title}</strong><small>{new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(todo.notifyAt))}{todo.completed ? ' · Completed' : ' · Scheduled'}</small></span></button><button className="calendar-delete-button" type="button" aria-label={`Delete ${todo.title}`} onClick={() => requestDelete(todo)}>×</button></li>)}</ul>}</section>
         {error && <p className="form-message error" role="alert">{error}</p>}
+        {message && <div className="toast-message" role="status">{message}<button type="button" aria-label="Dismiss message" onClick={() => setMessage('')}>×</button></div>}
       </section>
       <MobileBottomNavigation />
-      {selectedTodo && <TodoDetailDialog todo={selectedTodo} onClose={() => setSelectedTodo(null)} onSave={async (title, notifyAt) => { await updateTodo(selectedTodo, title, notifyAt) }} onToggleCompleted={async () => { await toggleTodo(selectedTodo.id); setSelectedTodo(null) }} onDelete={() => requestDelete(selectedTodo)} />}
-      {todoPendingDeletion && <DeleteTodoDialog todo={todoPendingDeletion} onCancel={() => setTodoPendingDeletion(null)} onConfirm={() => void confirmDelete()} />}
+      {selectedTodo && <TodoDetailDialog todo={selectedTodo} onClose={() => setSelectedTodo(null)} onSave={async (title, notifyAt, recurrenceRule) => { await updateTodo(selectedTodo, title, notifyAt, recurrenceRule) }} onToggleCompleted={async () => { await toggleTodo(selectedTodo.id); setSelectedTodo(null) }} onDelete={() => requestDelete(selectedTodo)} />}
+      {todoPendingDeletion && <DeleteTodoDialog todo={todoPendingDeletion} onCancel={() => setTodoPendingDeletion(null)} onConfirm={() => void confirmDelete()} onStopFutureReminders={todoPendingDeletion.recurrenceRule ? () => void confirmStopFutureReminders() : undefined} />}
     </main>
   )
 }
