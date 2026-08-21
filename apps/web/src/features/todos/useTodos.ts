@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { formatLocalDateTime } from './reminderDateTime'
-import { createTodo, fetchTodos, removeTodo, setTodoCompleted, updateTodo as persistTodoUpdate } from './todoService'
+import { createTodo, fetchTodos, removeTodo, setTodoCompleted, skipRecurringOccurrence as persistSkipRecurringOccurrence, stopRecurringReminder as persistStopRecurringReminder, updateTodo as persistTodoUpdate } from './todoService'
 import type { Todo } from './types'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 
-type TaskRealtimeRow = { id: string; title: string; notify_at: string; completed: boolean; completed_at: string | null }
+type TaskRealtimeRow = { id: string; title: string; notify_at: string; completed: boolean; completed_at: string | null; recurrence_rule: string | null }
 
 function mapRealtimeTodo(payload: RealtimePostgresChangesPayload<TaskRealtimeRow>): Todo | null {
   const row = payload.eventType === 'DELETE' ? payload.old : payload.new
   if (!row || typeof row.id !== 'string') return null
-  if (payload.eventType === 'DELETE') return { id: row.id, title: '', notifyAt: '', completed: false, completedAt: null }
+  if (payload.eventType === 'DELETE') return { id: row.id, title: '', notifyAt: '', completed: false, completedAt: null, recurrenceRule: null }
   if (typeof row.title !== 'string' || typeof row.notify_at !== 'string' || typeof row.completed !== 'boolean') return null
-  return { id: row.id, title: row.title, notifyAt: row.notify_at, completed: row.completed, completedAt: row.completed_at ?? null }
+  return { id: row.id, title: row.title, notifyAt: row.notify_at, completed: row.completed, completedAt: row.completed_at ?? null, recurrenceRule: row.recurrence_rule ?? null }
 }
 
 function upsertTodo(current: Todo[], incoming: Todo) {
@@ -75,8 +75,8 @@ export function useTodos(userId: string) {
     return () => { void client.removeChannel(channel) }
   }, [userId])
 
-  const addTodo = useCallback(async (title: string, notifyAt: string) => {
-    const created = await createTodo(userId, title, notifyAt, Intl.DateTimeFormat().resolvedOptions().timeZone)
+  const addTodo = useCallback(async (title: string, notifyAt: string, recurrenceRule: string | null = null) => {
+    const created = await createTodo(userId, title, notifyAt, recurrenceRule, Intl.DateTimeFormat().resolvedOptions().timeZone)
     // The INSERT Realtime event can arrive before or after this response.
     // Merge by the server-generated UUID so the task is rendered once.
     setTodos((current) => upsertTodo(current, created))
@@ -85,13 +85,15 @@ export function useTodos(userId: string) {
 
   const toggleTodo = useCallback(async (id: string) => {
     const current = todos.find((todo) => todo.id === id)
-    if (!current) return
+    if (!current) return false
     try {
       const updated = await setTodoCompleted(userId, id, !current.completed)
       setTodos((items) => items.map((todo) => todo.id === id ? updated : todo))
       setError(null)
+      return true
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Task could not be updated.')
+      return false
     }
   }, [todos, userId])
 
@@ -100,11 +102,21 @@ export function useTodos(userId: string) {
     setTodos((current) => current.filter((todo) => todo.id !== id))
   }, [userId])
 
-  const updateTodo = useCallback(async (todo: Todo, title: string, notifyAt: string) => {
-    const updated = await persistTodoUpdate(userId, todo, title, notifyAt)
-    setTodos((items) => items.map((item) => item.id === todo.id ? updated : item))
+  const stopRecurringReminder = useCallback(async (id: string) => {
+    await persistStopRecurringReminder(id)
+    await refresh()
+  }, [refresh])
+
+  const skipRecurringOccurrence = useCallback(async (id: string) => {
+    await persistSkipRecurringOccurrence(id)
+    await refresh()
+  }, [refresh])
+
+  const updateTodo = useCallback(async (todo: Todo, title: string, notifyAt: string, recurrenceRule: string | null) => {
+    const updated = await persistTodoUpdate(userId, todo, title, notifyAt, recurrenceRule)
+    setTodos((items) => [updated, ...items.filter((item) => item.id !== todo.id)].sort((left, right) => left.notifyAt.localeCompare(right.notifyAt)))
     return updated
   }, [userId])
 
-  return { todos, addTodo, toggleTodo, deleteTodo, updateTodo, isLoading, error, refresh }
+  return { todos, addTodo, toggleTodo, deleteTodo, skipRecurringOccurrence, stopRecurringReminder, updateTodo, isLoading, error, refresh }
 }

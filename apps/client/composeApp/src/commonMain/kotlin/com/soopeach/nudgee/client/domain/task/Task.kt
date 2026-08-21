@@ -7,4 +7,5 @@ data class Task(
     val completed: Boolean,
     val completedAt: String?,
     val notificationState: String,
+    val recurrenceRule: String?,
 )

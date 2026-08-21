@@ -56,6 +56,7 @@ import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
 import com.soopeach.nudgee.client.domain.reminder.ReminderParseUsage
 import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
 import com.soopeach.nudgee.client.domain.account.SupabaseAccountDeletionService
+import com.soopeach.nudgee.client.domain.task.Task
 
 private class SettingsViewModel : ViewModel() {
     private val _selectedCategory = MutableStateFlow<SettingsCategory?>(null)
@@ -146,6 +147,10 @@ fun SettingsScreen(
     email: String?,
     avatarUrl: String?,
     onSignOut: () -> Unit,
+    tasks: List<Task> = emptyList(),
+    onUpdateRecurringReminder: (Task, String, String, String?) -> Unit = { _, _, _, _ -> },
+    onSkipRecurringOccurrence: (Task) -> Unit = {},
+    onStopRecurringReminder: (Task) -> Unit = {},
     contentPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(),
 ) {
     val viewModel: SettingsViewModel = viewModel { SettingsViewModel() }
@@ -172,6 +177,17 @@ fun SettingsScreen(
     if (selectedCategory == SettingsCategory.Notifications) {
         NotificationSettingsScreen(
             onBack = viewModel::closeCategory,
+            contentPadding = contentPadding,
+        )
+        return
+    }
+    if (selectedCategory == SettingsCategory.RepeatingReminders) {
+        RecurringRemindersSettingsScreen(
+            tasks = tasks,
+            onBack = viewModel::closeCategory,
+            onUpdate = onUpdateRecurringReminder,
+            onSkip = onSkipRecurringOccurrence,
+            onStop = onStopRecurringReminder,
             contentPadding = contentPadding,
         )
         return
@@ -227,6 +243,15 @@ fun SettingsScreen(
         item {
             SettingsCard(title = "Home focus", accent = NudgeeColors.lavender) {
                 Text("Today stays focused on current nudges. Browse completed and past tasks in Calendar.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
+            }
+        }
+        item {
+            SettingsCard(
+                title = "Repeating reminders",
+                accent = NudgeeColors.periwinkle,
+                onClick = { viewModel.show(SettingsCategory.RepeatingReminders) },
+            ) {
+                Text("Edit your repeating schedule, skip one reminder, or stop future reminders.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
             }
         }
 
@@ -483,7 +508,7 @@ private fun NotificationPermissionStatus?.accentColor() = when (this) {
     NotificationPermissionStatus.Unavailable, null -> NudgeeColors.periwinkle
 }
 
-private enum class SettingsCategory { Notifications }
+private enum class SettingsCategory { Notifications, RepeatingReminders }
 
 @Composable
 private fun SettingsCard(

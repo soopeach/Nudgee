@@ -2,7 +2,14 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { importPKCS8, SignJWT } from 'npm:jose@5'
 import { recordOperationalError } from '../_shared/operationalErrors.ts'
 
-type Task = { id: string; user_id: string; title: string; notify_at: string; notification_occurrence: number }
+type Task = {
+  id: string
+  user_id: string
+  title: string
+  notify_at: string
+  notification_occurrence: number
+  notification_attempt_count: number
+}
 type DeviceToken = {
   id: string
   platform: 'web' | 'ios' | 'android' | 'desktop'
@@ -19,6 +26,7 @@ const fcmProjectId = Deno.env.get('FCM_PROJECT_ID')
 const fcmClientEmail = Deno.env.get('FCM_CLIENT_EMAIL')
 const fcmPrivateKey = Deno.env.get('FCM_PRIVATE_KEY')?.replace(/\\n/g, '\n')
 const reminderActionSecret = Deno.env.get('NUDGEE_REMINDER_ACTION_SECRET')
+const MAX_NOTIFICATION_ATTEMPTS = 5
 
 function getAdminKey() {
   const legacyKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -147,6 +155,11 @@ async function sendFcm(device: DeviceToken, task: Task, accessToken: string) {
   }
 }
 
+function retryAtForAttempt(attempt: number) {
+  const delayMinutes = [1, 5, 15, 60][Math.max(0, attempt - 1)] ?? 180
+  return new Date(Date.now() + delayMinutes * 60 * 1_000).toISOString()
+}
+
 function supportsInteractiveActions(device: DeviceToken) {
   // Only clients that have explicitly re-registered with this capability get
   // a data-only message. Older clients retain the FCM notification fallback.
@@ -183,7 +196,7 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
     // A retry of a partially failed task must not resend to devices that
     // already acknowledged delivery successfully.
     if (existingDelivery?.status === 'sent') continue
-    const { data: delivery, error: deliveryError } = await client.from('notification_deliveries').upsert({ task_id: task.id, user_id: task.user_id, device_token_id: device.id, channel: device.platform, occurrence: task.notification_occurrence, status: 'processing', attempt_count: 1, error_message: null }, { onConflict: 'task_id,device_token_id,channel,occurrence' }).select('id').single()
+    const { data: delivery, error: deliveryError } = await client.from('notification_deliveries').upsert({ task_id: task.id, user_id: task.user_id, device_token_id: device.id, channel: device.platform, occurrence: task.notification_occurrence, status: 'processing', attempt_count: task.notification_attempt_count, error_message: null }, { onConflict: 'task_id,device_token_id,channel,occurrence' }).select('id').single()
     if (deliveryError) { failed = true; continue }
     try {
       if (device.platform !== 'web' && device.platform !== 'android') throw new Error(`${device.platform} delivery is not implemented yet.`)
@@ -216,13 +229,28 @@ async function dispatchTask(client: SupabaseClient<any>, task: Task, accessToken
       .eq('occurrence', task.notification_occurrence)
       .in('device_token_id', remainingActiveDeviceIds)
       .in('status', ['pending', 'processing', 'failed'])
-  await client.from('tasks').update({ notification_state: failed || (remainingFailures ?? 0) > 0 ? 'failed' : 'sent', updated_at: new Date().toISOString() }).eq('id', task.id).eq('notification_state', 'processing')
+  const didFail = failed || (remainingFailures ?? 0) > 0
+  await client.from('tasks').update({
+    notification_state: didFail ? 'failed' : 'sent',
+    notification_retry_at: didFail && task.notification_attempt_count < MAX_NOTIFICATION_ATTEMPTS
+      ? retryAtForAttempt(task.notification_attempt_count)
+      : null,
+    notification_processing_started_at: null,
+    updated_at: new Date().toISOString(),
+  }).eq('id', task.id).eq('notification_state', 'processing')
   return { taskId: task.id, failed }
 }
 
-async function markTaskFailed(client: SupabaseClient<any>, taskId: string, error: unknown) {
-  await client.from('tasks').update({ notification_state: 'failed', updated_at: new Date().toISOString() }).eq('id', taskId).eq('notification_state', 'processing')
-  console.error('Task dispatch failed', { taskId, error: error instanceof Error ? error.message : error })
+async function markTaskFailed(client: SupabaseClient<any>, task: Task, error: unknown) {
+  await client.from('tasks').update({
+    notification_state: 'failed',
+    notification_retry_at: task.notification_attempt_count < MAX_NOTIFICATION_ATTEMPTS
+      ? retryAtForAttempt(task.notification_attempt_count)
+      : null,
+    notification_processing_started_at: null,
+    updated_at: new Date().toISOString(),
+  }).eq('id', task.id).eq('notification_state', 'processing')
+  console.error('Task dispatch failed', { taskId: task.id, error: error instanceof Error ? error.message : error })
   await recordOperationalError(client, 'notification_dispatch', 'task_dispatch_failed', 'Task dispatch failed.')
 }
 
@@ -244,6 +272,8 @@ Deno.serve(async (request) => {
     if (schedulerRunError || !schedulerRun) throw schedulerRunError ?? new Error('Could not create scheduler run.')
     runId = schedulerRun.id
     await client.from('notification_scheduler_runs').delete().lt('started_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000).toISOString())
+    const { error: recoveryError } = await client.rpc('reclaim_stale_notification_claims')
+    if (recoveryError) throw recoveryError
     const { data, error } = await client.rpc('claim_due_tasks', { p_limit: 50 })
     if (error) throw error
     const tasks = (data ?? []) as Task[]
@@ -252,7 +282,7 @@ Deno.serve(async (request) => {
     try {
       accessToken = tasks.length > 0 ? await getFcmAccessToken() : null
     } catch (caught) {
-      for (const task of tasks) await markTaskFailed(client, task.id, caught)
+      for (const task of tasks) await markTaskFailed(client, task, caught)
       throw caught
     }
     const results = []
@@ -260,7 +290,7 @@ Deno.serve(async (request) => {
       try {
         results.push(await dispatchTask(client, task, accessToken))
       } catch (caught) {
-        await markTaskFailed(client, task.id, caught)
+        await markTaskFailed(client, task, caught)
         results.push({ taskId: task.id, failed: true })
       }
     }

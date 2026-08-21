@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ReminderPicker } from './ReminderPicker'
+import { RecurrencePicker } from './RecurrencePicker'
 import { formatLocalDateTime } from './reminderDateTime'
+import type { RecurrenceRule } from './recurrence'
 import type { Todo } from './types'
 
 type TodoDetailDialogProps = {
   todo: Todo
   onClose: () => void
-  onSave: (title: string, notifyAt: string) => Promise<void>
+  onSave: (title: string, notifyAt: string, recurrenceRule: RecurrenceRule) => Promise<void>
   onToggleCompleted: () => Promise<void>
   onDelete: () => void
 }
@@ -14,12 +16,14 @@ type TodoDetailDialogProps = {
 export function TodoDetailDialog({ todo, onClose, onSave, onToggleCompleted, onDelete }: TodoDetailDialogProps) {
   const [title, setTitle] = useState(todo.title)
   const [notifyAt, setNotifyAt] = useState(formatLocalDateTime(new Date(todo.notifyAt)))
+  const [recurrenceRule, setRecurrenceRule] = useState<RecurrenceRule>(todo.recurrenceRule as RecurrenceRule)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
     setTitle(todo.title)
     setNotifyAt(formatLocalDateTime(new Date(todo.notifyAt)))
+    setRecurrenceRule(todo.recurrenceRule as RecurrenceRule)
     setError('')
   }, [todo])
 
@@ -33,7 +37,7 @@ export function TodoDetailDialog({ todo, onClose, onSave, onToggleCompleted, onD
     setIsSaving(true)
     setError('')
     try {
-      await onSave(title.trim(), notifyAt)
+      await onSave(title.trim(), notifyAt, recurrenceRule)
       onClose()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Task could not be updated.')
@@ -53,6 +57,7 @@ export function TodoDetailDialog({ todo, onClose, onSave, onToggleCompleted, onD
         <form onSubmit={(event) => void submit(event)}>
           <label className="detail-title-field"><span>WHAT NEEDS DOING?</span><input value={title} disabled={isSaving} onChange={(event) => setTitle(event.target.value)} required /></label>
           <ReminderPicker value={notifyAt} onChange={setNotifyAt} />
+          <RecurrencePicker value={recurrenceRule} onChange={setRecurrenceRule} />
           {todo.completed && <p className="detail-completed-note">This task is complete, so changing its reminder will not create a new notification.</p>}
           {error && <p className="form-message error" role="alert">{error}</p>}
           <div className="detail-actions"><button className="dialog-cancel" type="button" disabled={isSaving} onClick={() => void toggleCompleted()}>{todo.completed ? 'Reopen task' : 'Mark complete'}</button><button className="dialog-primary" type="submit" disabled={isSaving}>{isSaving ? 'Saving…' : 'Save changes'}</button></div>

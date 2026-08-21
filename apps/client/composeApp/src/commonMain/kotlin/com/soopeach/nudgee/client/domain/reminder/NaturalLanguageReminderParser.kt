@@ -13,11 +13,16 @@ import kotlinx.serialization.Serializable
 data class ParsedReminderDraft(
     val title: String,
     val notifyAt: String?,
+    val recurrenceRule: String?,
     val needsClarification: Boolean,
     val clarification: String?,
+    val clarificationType: ClarificationType? = null,
+    val suggestedTime: String? = null,
     val remainingFreeParses: Int? = null,
     val bonusCredits: Int? = null,
 )
+
+enum class ClarificationType { Time, Recurrence }
 
 data class ReminderParseUsage(
     val usedFreeParses: Int,
@@ -62,12 +67,20 @@ class SupabaseEdgeFunctionReminderParser(
         val parsed = response.body<ParseReminderResponse>()
         val title = parsed.title.trim()
         require(title.isNotBlank()) { "Nudgee could not find a task in that reminder." }
+        val hasUnsupportedRecurrence = !isSupportedRecurrenceRule(parsed.recurrenceRule)
 
         return ParsedReminderDraft(
             title = title,
             notifyAt = parsed.notifyAt,
-            needsClarification = parsed.needsClarification || parsed.notifyAt == null,
-            clarification = parsed.clarification,
+            recurrenceRule = parsed.recurrenceRule.takeIf(::isSupportedRecurrenceRule),
+            needsClarification = parsed.needsClarification || parsed.notifyAt == null || hasUnsupportedRecurrence,
+            clarification = if (hasUnsupportedRecurrence) {
+                "Nudgee currently supports every day, every weekday, every weekend, or every week. Choose one below."
+            } else {
+                parsed.clarification
+            },
+            clarificationType = if (hasUnsupportedRecurrence) ClarificationType.Recurrence else parsed.clarificationType?.toClarificationType(),
+            suggestedTime = parsed.suggestedTime,
             remainingFreeParses = parsed.remainingFreeParses,
             bonusCredits = parsed.bonusCredits,
         )
@@ -125,11 +138,27 @@ private data class ParseReminderRequest(
 private data class ParseReminderResponse(
     val title: String,
     val notifyAt: String? = null,
+    val recurrenceRule: String? = null,
     val needsClarification: Boolean = false,
     val clarification: String? = null,
+    val clarificationType: String? = null,
+    val suggestedTime: String? = null,
     val remainingFreeParses: Int? = null,
     val bonusCredits: Int? = null,
 )
+
+private fun isSupportedRecurrenceRule(rule: String?): Boolean = rule == null || rule in setOf(
+    "FREQ=DAILY",
+    "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "FREQ=WEEKLY;BYDAY=SA,SU",
+    "FREQ=WEEKLY",
+)
+
+private fun String.toClarificationType(): ClarificationType? = when (this) {
+    "time" -> ClarificationType.Time
+    "recurrence" -> ClarificationType.Recurrence
+    else -> null
+}
 
 @Serializable
 private data class ParseReminderUsageRequest(

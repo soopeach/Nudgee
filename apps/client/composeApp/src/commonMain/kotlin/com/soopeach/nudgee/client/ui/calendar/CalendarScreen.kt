@@ -36,9 +36,11 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.soopeach.nudgee.client.NudgeeColors
 import com.soopeach.nudgee.client.domain.task.Task
+import com.soopeach.nudgee.client.domain.task.TaskRecurrence
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButtonStyle
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeSurface
+import com.soopeach.nudgee.client.ui.designsystem.NudgeeSegmentedControl
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextInput
 import kotlinx.datetime.Clock
@@ -72,6 +74,7 @@ private data class CalendarTaskDetailUiState(
     val title: String,
     val date: String,
     val time: String,
+    val recurrence: TaskRecurrence,
     val error: String? = null,
     val isConfirmingDeletion: Boolean = false,
 )
@@ -83,6 +86,7 @@ private class CalendarTaskDetailViewModel(task: Task) : ViewModel() {
             title = task.title,
             date = task.dateInDeviceTimezone().toString(),
             time = task.timeIn24HourFormat(),
+            recurrence = TaskRecurrence.fromRule(task.recurrenceRule),
         ),
     )
     val state = _state.asStateFlow()
@@ -92,13 +96,14 @@ private class CalendarTaskDetailViewModel(task: Task) : ViewModel() {
     fun updateTitle(value: String) = update { it.copy(title = value, error = null) }
     fun updateDate(value: String) = update { it.copy(date = value, error = null) }
     fun updateTime(value: String) = update { it.copy(time = value, error = null) }
+    fun updateRecurrence(value: TaskRecurrence) = update { it.copy(recurrence = value, error = null) }
     fun showDeleteConfirmation() = update { it.copy(isConfirmingDeletion = true) }
     fun dismissDeleteConfirmation() = update { it.copy(isConfirmingDeletion = false) }
 
-    fun validateSave(onValid: (title: String, notifyAt: String) -> Unit) {
+    fun validateSave(onValid: (title: String, notifyAt: String, recurrenceRule: String?) -> Unit) {
         val current = state.value
         taskUpdateInstant(current.date, current.time)
-            .onSuccess { onValid(current.title.trim(), it) }
+            .onSuccess { onValid(current.title.trim(), it, current.recurrence.rule) }
             .onFailure { error -> update { it.copy(error = error.message ?: "Enter a valid date and time.") } }
     }
 
@@ -111,7 +116,7 @@ fun CalendarScreen(
     contentPadding: PaddingValues = PaddingValues(),
     onToggleTask: (Task) -> Unit = {},
     onDeleteTask: (Task) -> Unit = {},
-    onUpdateTask: (Task, String, String) -> Unit = { _, _, _ -> },
+    onUpdateTask: (Task, String, String, String?) -> Unit = { _, _, _, _ -> },
 ) {
     val today = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date }
     val calendarViewModel: CalendarViewModel = viewModel { CalendarViewModel(today) }
@@ -163,8 +168,8 @@ fun CalendarScreen(
                 onDeleteTask(task)
                 calendarViewModel.update { it.copy(taskInDetail = null) }
             },
-            onSave = { title, notifyAt ->
-                onUpdateTask(task, title, notifyAt)
+            onSave = { title, notifyAt, recurrenceRule ->
+                onUpdateTask(task, title, notifyAt, recurrenceRule)
                 calendarViewModel.update { it.copy(taskInDetail = null) }
             },
         )
@@ -300,12 +305,12 @@ private fun CalendarTaskCard(task: Task, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CalendarTaskDetailSheet(
+fun CalendarTaskDetailSheet(
     task: Task,
     onDismiss: () -> Unit,
     onToggleTask: () -> Unit,
     onDeleteTask: () -> Unit,
-    onSave: (String, String) -> Unit,
+    onSave: (String, String, String?) -> Unit,
 ) {
     val detailViewModel: CalendarTaskDetailViewModel = viewModel(key = task.id) { CalendarTaskDetailViewModel(task) }
     val state by detailViewModel.state.collectAsState()
@@ -359,6 +364,13 @@ private fun CalendarTaskDetailSheet(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                Text("Does it repeat?", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
+                NudgeeSegmentedControl(
+                    options = TaskRecurrence.entries.map(TaskRecurrence::label),
+                    selectedIndex = state.recurrence.ordinal,
+                    onOptionSelected = { detailViewModel.updateRecurrence(TaskRecurrence.entries[it]) },
+                    selectedColor = NudgeeColors.mint.copy(alpha = 0.56f),
+                )
                 state.error?.let { message ->
                     Text(message, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
                 }

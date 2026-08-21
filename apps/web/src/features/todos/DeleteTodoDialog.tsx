@@ -5,9 +5,10 @@ type DeleteTodoDialogProps = {
   todo: Todo
   onCancel: () => void
   onConfirm: () => void
+  onStopFutureReminders?: () => void
 }
 
-export function DeleteTodoDialog({ todo, onCancel, onConfirm }: DeleteTodoDialogProps) {
+export function DeleteTodoDialog({ todo, onCancel, onConfirm, onStopFutureReminders }: DeleteTodoDialogProps) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -23,12 +24,13 @@ export function DeleteTodoDialog({ todo, onCancel, onConfirm }: DeleteTodoDialog
     <div className="dialog-backdrop" role="presentation" onMouseDown={onCancel}>
       <section className="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="dialog-icon" aria-hidden="true">×</div>
-        <h2 id="delete-dialog-title">Delete this task?</h2>
-        <p><strong>{todo.title}</strong> will be removed from your list. This can’t be undone.</p>
+        <h2 id="delete-dialog-title">{onStopFutureReminders ? 'Manage repeating reminder' : 'Delete this task?'}</h2>
+        <p>{onStopFutureReminders ? <>Skip <strong>{todo.title}</strong> and keep the next reminder scheduled, or stop its future reminders. Completed history stays in your account.</> : <><strong>{todo.title}</strong> will be removed from your list. This can’t be undone.</>}</p>
         <div className="dialog-actions">
-          <button ref={cancelButtonRef} className="dialog-cancel" type="button" onClick={onCancel}>Keep task</button>
-          <button className="dialog-delete" type="button" onClick={onConfirm}>Delete task</button>
+          <button ref={cancelButtonRef} className="dialog-cancel" type="button" onClick={onCancel}>Cancel</button>
+          <button className="dialog-delete" type="button" onClick={onConfirm}>{onStopFutureReminders ? 'Skip this occurrence' : 'Delete task'}</button>
         </div>
+        {onStopFutureReminders && <button className="dialog-text-action" type="button" onClick={onStopFutureReminders}>Stop future reminders</button>}
       </section>
     </div>
   )

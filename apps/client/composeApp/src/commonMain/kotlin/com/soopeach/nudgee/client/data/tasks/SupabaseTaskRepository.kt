@@ -5,6 +5,7 @@ import com.soopeach.nudgee.client.domain.task.TaskRepository
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresListDataFlow
@@ -19,6 +20,8 @@ import kotlinx.datetime.Clock
 import kotlinx.datetime.TimeZone
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class SupabaseTaskRepository(
     private val supabase: SupabaseClient,
@@ -50,7 +53,7 @@ class SupabaseTaskRepository(
         }
     }
 
-    override suspend fun createTask(title: String, notifyAt: String): Task {
+    override suspend fun createTask(title: String, notifyAt: String, recurrenceRule: String?): Task {
         return supabase
             .from(TASKS_TABLE)
             .insert(
@@ -59,6 +62,7 @@ class SupabaseTaskRepository(
                     title = title.trim(),
                     notifyAt = notifyAt,
                     timezone = TimeZone.currentSystemDefault().id,
+                    recurrenceRule = recurrenceRule,
                 ),
             ) {
                 select()
@@ -83,7 +87,7 @@ class SupabaseTaskRepository(
             .toDomain()
     }
 
-    override suspend fun updateTask(taskId: String, title: String, notifyAt: String): Task {
+    override suspend fun updateTask(taskId: String, title: String, notifyAt: String, recurrenceRule: String?): Task {
         return supabase
             .from(TASKS_TABLE)
             .update(
@@ -91,6 +95,7 @@ class SupabaseTaskRepository(
                     title = title.trim(),
                     notifyAt = notifyAt,
                     timezone = TimeZone.currentSystemDefault().id,
+                    recurrenceRule = recurrenceRule,
                 ),
             ) {
                 select()
@@ -100,12 +105,40 @@ class SupabaseTaskRepository(
             .toDomain()
     }
 
+    override suspend fun replaceRecurringSchedule(taskId: String, title: String, notifyAt: String, recurrenceRule: String?): Task {
+        return supabase.postgrest.rpc(
+            function = "replace_recurring_schedule",
+            parameters = buildJsonObject {
+                put("p_task_id", taskId)
+                put("p_title", title.trim())
+                put("p_notify_at", notifyAt)
+                put("p_timezone", TimeZone.currentSystemDefault().id)
+                if (recurrenceRule == null) put("p_recurrence_rule", kotlinx.serialization.json.JsonNull)
+                else put("p_recurrence_rule", recurrenceRule)
+            },
+        ).decodeSingle<TaskDto>().toDomain()
+    }
+
     override suspend fun deleteTask(taskId: String) {
         supabase
             .from(TASKS_TABLE)
             .delete {
                 filter { eq("id", taskId) }
             }
+    }
+
+    override suspend fun skipRecurringOccurrence(taskId: String) {
+        supabase.postgrest.rpc(
+            function = "skip_recurring_occurrence",
+            parameters = buildJsonObject { put("p_task_id", taskId) },
+        )
+    }
+
+    override suspend fun stopRecurringReminder(taskId: String) {
+        supabase.postgrest.rpc(
+            function = "stop_recurring_reminder",
+            parameters = buildJsonObject { put("p_task_id", taskId) },
+        )
     }
 
     private fun currentUserId(): String = requireNotNull(supabase.auth.currentUserOrNull()?.id) {
@@ -125,6 +158,7 @@ private data class TaskDto(
     val completed: Boolean,
     @SerialName("completed_at") val completedAt: String? = null,
     @SerialName("notification_state") val notificationState: String = "pending",
+    @SerialName("recurrence_rule") val recurrenceRule: String? = null,
 )
 
 @Serializable
@@ -133,6 +167,7 @@ private data class TaskCreateDto(
     val title: String,
     @SerialName("notify_at") val notifyAt: String,
     val timezone: String,
+    @SerialName("recurrence_rule") val recurrenceRule: String? = null,
     val completed: Boolean = false,
     @SerialName("completed_at") val completedAt: String? = null,
     @SerialName("notification_state") val notificationState: String = "pending",
@@ -149,6 +184,7 @@ private data class TaskUpdateDto(
     val title: String,
     @SerialName("notify_at") val notifyAt: String,
     val timezone: String,
+    @SerialName("recurrence_rule") val recurrenceRule: String? = null,
 )
 
 private fun TaskDto.toDomain() = Task(
@@ -158,4 +194,5 @@ private fun TaskDto.toDomain() = Task(
     completed = completed,
     completedAt = completedAt,
     notificationState = notificationState,
+    recurrenceRule = recurrenceRule,
 )

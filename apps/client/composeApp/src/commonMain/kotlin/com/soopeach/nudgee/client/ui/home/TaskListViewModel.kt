@@ -79,33 +79,63 @@ class TaskListViewModel(
         realtimeJob = null
     }
 
-    fun addTask(title: String, notifyAt: String) = mutate {
-        repository.createTask(title, notifyAt).also { created ->
+    fun addTask(
+        title: String,
+        notifyAt: String,
+        recurrenceRule: String? = null,
+        onSuccess: () -> Unit = {},
+    ) = mutate(onSuccess) {
+        repository.createTask(title, notifyAt, recurrenceRule).also { created ->
             _state.update { state -> state.copy(tasks = state.tasks.upsert(created)) }
         }
     }
 
-    fun toggleTask(task: Task) = mutate {
+    fun toggleTask(task: Task, onSuccess: () -> Unit = {}) = mutate(onSuccess) {
         repository.setCompleted(task.id, !task.completed).also { updated ->
             _state.update { state -> state.copy(tasks = state.tasks.upsert(updated)) }
         }
     }
 
-    fun updateTask(task: Task, title: String, notifyAt: String) = mutate {
-        repository.updateTask(task.id, title, notifyAt).also { updated ->
-            _state.update { state -> state.copy(tasks = state.tasks.upsert(updated)) }
+    fun updateTask(
+        task: Task,
+        title: String,
+        notifyAt: String,
+        recurrenceRule: String? = task.recurrenceRule,
+        onSuccess: () -> Unit = {},
+    ) = mutate(onSuccess) {
+        val replacesRemainingRecurringSchedule = !task.completed && (task.recurrenceRule != null || recurrenceRule != null)
+        val updated = if (replacesRemainingRecurringSchedule) {
+            repository.replaceRecurringSchedule(task.id, title, notifyAt, recurrenceRule)
+        } else {
+            repository.updateTask(task.id, title, notifyAt, recurrenceRule)
+        }
+        _state.update { state ->
+            state.copy(tasks = state.tasks.filterNot { it.id == task.id }.upsert(updated))
         }
     }
 
-    fun deleteTask(task: Task) = mutate {
+    fun deleteTask(task: Task, onSuccess: () -> Unit = {}) = mutate(onSuccess) {
         repository.deleteTask(task.id)
         _state.update { state -> state.copy(tasks = state.tasks.filterNot { it.id == task.id }) }
     }
 
-    private fun mutate(operation: suspend () -> Unit) {
+    fun skipRecurringOccurrence(task: Task, onSuccess: () -> Unit = {}) = mutate(onSuccess) {
+        repository.skipRecurringOccurrence(task.id)
+        val refreshedTasks = repository.fetchTasks()
+        _state.update { it.copy(tasks = refreshedTasks) }
+    }
+
+    fun stopRecurringReminder(task: Task, onSuccess: () -> Unit = {}) = mutate(onSuccess) {
+        repository.stopRecurringReminder(task.id)
+        val refreshedTasks = repository.fetchTasks()
+        _state.update { it.copy(tasks = refreshedTasks) }
+    }
+
+    private fun mutate(onSuccess: () -> Unit = {}, operation: suspend () -> Unit) {
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             runCatching { operation() }
+                .onSuccess { onSuccess() }
                 .onFailure { error -> _state.update { it.copy(error = error.toUserMessage()) } }
             _state.update { it.copy(isSaving = false) }
         }
