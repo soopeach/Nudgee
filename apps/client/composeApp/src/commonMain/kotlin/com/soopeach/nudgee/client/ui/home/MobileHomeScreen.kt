@@ -985,14 +985,7 @@ private fun ReminderClarificationDialog(
                 modifier = Modifier.padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(NudgeeColors.mint.copy(alpha = 0.5f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
-                }
+                ClarificationIllustration(clarificationType)
                 Text(if (clarificationType == ClarificationType.Recurrence) "Choose a repeat pattern" else "One more detail", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
                 Text(message, style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
                 Text(if (clarificationType == ClarificationType.Recurrence) "You can pick one of Nudgee’s supported repeat patterns below." else "Add a date or time, then Nudgee can schedule it.", style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
@@ -1005,6 +998,67 @@ private fun ReminderClarificationDialog(
                     style = NudgeeButtonStyle.Secondary,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ClarificationIllustration(clarificationType: ClarificationType?) {
+    val accent = if (clarificationType == ClarificationType.Recurrence) NudgeeColors.lavender else NudgeeColors.sky
+    Box(
+        modifier = Modifier
+            .size(62.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(accent.copy(alpha = 0.30f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(46.dp)) {
+            val bubbleLeft = size.width * .08f
+            val bubbleTop = size.height * .19f
+            val bubbleWidth = size.width * .67f
+            val bubbleHeight = size.height * .55f
+            val bubbleColor = Color.White
+
+            drawRoundRect(
+                color = bubbleColor,
+                topLeft = androidx.compose.ui.geometry.Offset(bubbleLeft, bubbleTop),
+                size = androidx.compose.ui.geometry.Size(bubbleWidth, bubbleHeight),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * .18f),
+            )
+            drawCircle(
+                color = NudgeeColors.ink.copy(alpha = .72f),
+                radius = size.width * .045f,
+                center = androidx.compose.ui.geometry.Offset(size.width * .30f, size.height * .47f),
+            )
+            drawCircle(
+                color = NudgeeColors.ink.copy(alpha = .72f),
+                radius = size.width * .045f,
+                center = androidx.compose.ui.geometry.Offset(size.width * .42f, size.height * .47f),
+            )
+            drawCircle(
+                color = NudgeeColors.ink.copy(alpha = .72f),
+                radius = size.width * .045f,
+                center = androidx.compose.ui.geometry.Offset(size.width * .54f, size.height * .47f),
+            )
+            drawLine(
+                color = accent,
+                start = androidx.compose.ui.geometry.Offset(size.width * .81f, size.height * .10f),
+                end = androidx.compose.ui.geometry.Offset(size.width * .81f, size.height * .29f),
+                strokeWidth = size.width * .055f,
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = accent,
+                start = androidx.compose.ui.geometry.Offset(size.width * .72f, size.height * .195f),
+                end = androidx.compose.ui.geometry.Offset(size.width * .90f, size.height * .195f),
+                strokeWidth = size.width * .055f,
+                cap = StrokeCap.Round,
+            )
+            drawCircle(
+                color = NudgeeColors.mint,
+                radius = size.width * .10f,
+                center = androidx.compose.ui.geometry.Offset(size.width * .79f, size.height * .73f),
+            )
         }
     }
 }
