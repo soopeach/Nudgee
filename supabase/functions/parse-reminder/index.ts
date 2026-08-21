@@ -1,8 +1,16 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { recordOperationalError } from '../_shared/operationalErrors.ts'
+import { applyServerRelativeTime, rollRecurringReminderForward, validateParsedReminder } from '../_shared/reminderParsing.mjs'
 
 type ParseRequest = { action?: unknown; text?: unknown; timezone?: unknown; locale?: unknown; now?: unknown }
-type GeminiResult = { title?: unknown; notifyAt?: unknown; needsClarification?: unknown; clarification?: unknown }
+type GeminiResult = {
+  title?: unknown
+  notifyAt?: unknown
+  recurrenceRule?: unknown
+  needsClarification?: unknown
+  clarification?: unknown
+  clarificationType?: unknown
+}
 type ParseCreditResult = {
   allowed: boolean
   remaining_free_parses: number
@@ -68,34 +76,6 @@ function validateRequest(body: ParseRequest) {
   const now = new Date().toISOString()
   if (!text || text.length > 1_000) throw new Error('Enter a reminder with fewer than 1,000 characters.')
   return { text, timezone, locale, now }
-}
-
-function explicitRelativeOffsetMs(text: string): number | null {
-  const patterns: Array<{ regex: RegExp; unitMs: number }> = [
-    { regex: /(\d+)\s*분\s*(?:뒤|후)(?:에)?/, unitMs: 60_000 },
-    { regex: /(\d+)\s*시간\s*(?:뒤|후)(?:에)?/, unitMs: 60 * 60_000 },
-    { regex: /\bin\s+(\d+)\s*(?:minute|minutes)\b/i, unitMs: 60_000 },
-    { regex: /\b(\d+)\s*(?:minute|minutes)\s*(?:later|from now)\b/i, unitMs: 60_000 },
-    { regex: /\bin\s+(\d+)\s*(?:hour|hours)\b/i, unitMs: 60 * 60_000 },
-    { regex: /\b(\d+)\s*(?:hour|hours)\s*(?:later|from now)\b/i, unitMs: 60 * 60_000 },
-  ]
-
-  for (const { regex, unitMs } of patterns) {
-    const match = text.match(regex)
-    const amount = Number(match?.[1])
-    if (Number.isSafeInteger(amount) && amount > 0 && amount <= 365 * 24) return amount * unitMs
-  }
-  return null
-}
-
-function validateResult(result: GeminiResult) {
-  const title = typeof result.title === 'string' ? result.title.trim().slice(0, 240) : ''
-  const notifyAt = typeof result.notifyAt === 'string' && !Number.isNaN(Date.parse(result.notifyAt)) ? result.notifyAt : null
-  const needsClarification = result.needsClarification === true || !notifyAt
-  const clarification = typeof result.clarification === 'string' ? result.clarification.trim().slice(0, 240) : null
-  if (!title) throw new Error('No task was found in the response.')
-  if (!needsClarification && new Date(notifyAt as string) <= new Date()) throw new Error('The reminder time must be in the future.')
-  return { title, notifyAt, needsClarification, clarification }
 }
 
 async function refundParseCredit(
@@ -220,7 +200,18 @@ Deno.serve(async (request) => {
     claimedTimezone = input.timezone
 
     stage = 'gemini_request'
-    const prompt = `You parse reminder requests into a single task. Current instant: ${input.now}. User timezone: ${input.timezone}. User locale: ${input.locale}.\n\nReturn a concise task title and an exact future RFC 3339 timestamp with its UTC offset only when the request unambiguously specifies a reminder time. Relative dates must be resolved from the current instant in the user's timezone. If no time, date, or sufficiently precise reminder moment is specified, set notifyAt to null and needsClarification to true. Never invent a time.\n\nUser request: ${input.text}`
+    const prompt = `You parse a user request into one Nudgee reminder. Current instant: ${input.now}. User timezone: ${input.timezone}. User locale: ${input.locale}.
+
+Return a concise task title and an exact future RFC 3339 timestamp with its UTC offset only when the request unambiguously specifies a reminder time. Resolve relative dates from the current instant in the user's timezone. Never invent a time. For a repeating request whose stated time has already passed today, return the next valid repeating occurrence (for example, “every day at 10am” at 2pm means tomorrow at 10am).
+
+Nudgee supports only these recurrence values:
+- null: one-time reminder (use when the user did not explicitly ask for repetition)
+- FREQ=DAILY: every day
+- FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR: every weekday / business day
+- FREQ=WEEKLY;BYDAY=SA,SU: every weekend / Saturday and Sunday
+- FREQ=WEEKLY: every week on the local weekday of notifyAt (including “every Monday”)
+
+If the user requests an unsupported pattern (monthly, yearly, multiple weekdays, intervals such as every 2 days, multiple times per day, or an end date), do not invent a rule. Set recurrenceRule to null, needsClarification to true, clarificationType to recurrence, and explain that only daily, weekdays, and weekly are currently supported. If the repetition is clear but its time is missing, set needsClarification to true and clarificationType to time. If both are unclear, ask for the time first.\n\nUser request: ${input.text}`
     const response = await fetch(GEMINI_INTERACTIONS_URL, {
       method: 'POST',
       headers: {
@@ -238,11 +229,18 @@ Deno.serve(async (request) => {
             type: 'object',
             properties: {
               title: { type: 'string' },
-              notifyAt: { type: 'string', nullable: true },
+              notifyAt: { type: ['string', 'null'] },
+              recurrenceRule: {
+                // Keep this nullable field permissive at the schema boundary
+                // and enforce the allow-list in validateResult(). Gemini's
+                // structured-output subset does not support nullable enums.
+                type: ['string', 'null'],
+              },
               needsClarification: { type: 'boolean' },
-              clarification: { type: 'string', nullable: true },
+              clarification: { type: ['string', 'null'] },
+              clarificationType: { type: ['string', 'null'] },
             },
-            required: ['title', 'notifyAt', 'needsClarification', 'clarification'],
+            required: ['title', 'notifyAt', 'recurrenceRule', 'needsClarification', 'clarification', 'clarificationType'],
           },
         }],
       }),
@@ -260,21 +258,20 @@ Deno.serve(async (request) => {
     }
     stage = 'result_validation'
     const result = JSON.parse(getInteractionText(await response.json())) as GeminiResult
-    const relativeOffsetMs = explicitRelativeOffsetMs(input.text)
-    const resultWithServerRelativeTime: GeminiResult = relativeOffsetMs == null
-      ? result
-      : {
-          ...result,
-          notifyAt: new Date(Date.parse(input.now) + relativeOffsetMs).toISOString(),
-          needsClarification: false,
-        }
-    const validatedResult = validateResult(resultWithServerRelativeTime)
+    const { result: resultWithServerRelativeTime, usedServerRelativeTime } = applyServerRelativeTime(result, input.text, input.now)
+    const { result: resultWithFutureRecurrence, rolledForward } = rollRecurringReminderForward(
+      resultWithServerRelativeTime,
+      input.timezone,
+      new Date(input.now),
+    )
+    const validatedResult = validateParsedReminder(resultWithFutureRecurrence)
     console.info('Reminder parse completed', {
       requestId,
       userId: user.id,
       needsClarification: validatedResult.needsClarification,
       hasNotifyAt: validatedResult.notifyAt !== null,
-      usedServerRelativeTime: relativeOffsetMs !== null,
+      usedServerRelativeTime,
+      rolledForward,
     })
     return json({
       ...validatedResult,
