@@ -114,6 +114,33 @@ export function rollRecurringReminderForward(result, timezone, now = new Date())
   return { result: { ...result, notifyAt: candidate.toISOString() }, rolledForward: true }
 }
 
+function hasUnqualifiedKoreanHour(text) {
+  const matcher = /(?:^|\s)([1-9]|1[0-2])\s*시(?=\s|$|[에쯤])/g
+  for (const match of text.matchAll(matcher)) {
+    const prefix = text.slice(Math.max(0, match.index - 8), match.index)
+    if (!/(오전|오후|아침|낮|저녁|밤)\s*$/u.test(prefix)) return true
+  }
+  return false
+}
+
+/**
+ * A bare 1–12 hour is not enough information to schedule a reliable reminder.
+ * Gemini is prompted to ask, but this server-side guard prevents an accidental
+ * AM/PM guess from reaching a client if the model overlooks that instruction.
+ */
+export function requireMeridiemClarification(result, text) {
+  const hasUnqualifiedEnglishHour = /\bat\s+(?:[1-9]|1[0-2])\b(?!\s*(?:am|pm)\b)|\b(?:[1-9]|1[0-2])\s*o['’]?clock\b(?!\s*(?:am|pm)\b)/iu.test(text)
+  if (!hasUnqualifiedEnglishHour && !hasUnqualifiedKoreanHour(text)) return result
+
+  return {
+    ...result,
+    notifyAt: null,
+    needsClarification: true,
+    clarificationType: 'time',
+    clarification: 'Is that in the morning or evening? Choose the exact date and time below.',
+  }
+}
+
 /**
  * Validates Gemini's untrusted structured response before it reaches a client.
  * `now` is injectable so its boundary conditions can be tested deterministically.

@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { recordOperationalError } from '../_shared/operationalErrors.ts'
-import { applyServerRelativeTime, rollRecurringReminderForward, validateParsedReminder } from '../_shared/reminderParsing.mjs'
+import { applyServerRelativeTime, requireMeridiemClarification, rollRecurringReminderForward, validateParsedReminder } from '../_shared/reminderParsing.mjs'
 
 type ParseRequest = { action?: unknown; text?: unknown; timezone?: unknown; locale?: unknown; now?: unknown }
 type GeminiResult = {
@@ -204,6 +204,8 @@ Deno.serve(async (request) => {
 
 Return a concise task title and an exact future RFC 3339 timestamp with its UTC offset only when the request unambiguously specifies a reminder time. Resolve relative dates from the current instant in the user's timezone. Never invent a time. For a repeating request whose stated time has already passed today, return the next valid repeating occurrence (for example, “every day at 10am” at 2pm means tomorrow at 10am).
 
+An hour without an AM/PM or morning/afternoon qualifier is ambiguous. This includes English requests such as “at 10” or “10 o'clock”, and Korean requests such as “10시”. For these, do not guess. Set notifyAt to null, needsClarification to true, clarificationType to time, and ask whether the user means AM or PM. A 24-hour time such as 22:00 is unambiguous.
+
 Nudgee supports only these recurrence values:
 - null: one-time reminder (use when the user did not explicitly ask for repetition)
 - FREQ=DAILY: every day
@@ -264,7 +266,8 @@ If the user requests an unsupported pattern (monthly, yearly, multiple weekdays,
       input.timezone,
       new Date(input.now),
     )
-    const validatedResult = validateParsedReminder(resultWithFutureRecurrence)
+    const resultWithRequiredMeridiem = requireMeridiemClarification(resultWithFutureRecurrence, input.text)
+    const validatedResult = validateParsedReminder(resultWithRequiredMeridiem)
     console.info('Reminder parse completed', {
       requestId,
       userId: user.id,

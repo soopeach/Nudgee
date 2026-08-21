@@ -23,6 +23,20 @@ export type ReminderParseUsage = {
   dailyFreeParseLimit: number
 }
 
+async function getFunctionErrorMessage(error: unknown, fallback: string) {
+  const context = typeof error === 'object' && error !== null && 'context' in error
+    ? (error as { context?: unknown }).context
+    : null
+  const response = context instanceof Response ? context : null
+  const payload = response
+    ? await response.json().catch(() => null) as { error?: unknown } | null
+    : null
+
+  if (typeof payload?.error === 'string' && payload.error.trim()) return payload.error
+  if (error instanceof Error && error.message.trim()) return error.message
+  return fallback
+}
+
 function readParsedReminder(value: unknown): ParsedReminder {
   if (!value || typeof value !== 'object') throw new Error('Nudgee could not understand that reminder. Please try again.')
   const parsed = value as Record<string, unknown>
@@ -56,7 +70,7 @@ export async function parseNaturalLanguageReminder(text: string): Promise<Parsed
       now: new Date().toISOString(),
     },
   })
-  if (error) throw new Error(error.message || 'Nudgee could not parse that reminder.')
+  if (error) throw new Error(await getFunctionErrorMessage(error, 'Nudgee could not parse that reminder.'))
   return readParsedReminder(data)
 }
 
@@ -65,7 +79,7 @@ export async function getReminderParseUsage(): Promise<ReminderParseUsage> {
   const { data, error } = await supabase.functions.invoke('parse-reminder', {
     body: { action: 'usage', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
   })
-  if (error) throw new Error(error.message || 'Nudgee could not load AI reminder usage.')
+  if (error) throw new Error(await getFunctionErrorMessage(error, 'Nudgee could not load AI reminder usage.'))
   const usage = data as Partial<ReminderParseUsage> | null
   if (!usage || typeof usage.remainingFreeParses !== 'number' || typeof usage.bonusCredits !== 'number') {
     throw new Error('Nudgee could not load AI reminder usage.')
