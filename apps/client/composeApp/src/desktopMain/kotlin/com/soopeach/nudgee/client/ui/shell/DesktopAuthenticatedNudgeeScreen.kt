@@ -1,7 +1,9 @@
 package com.soopeach.nudgee.client.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +41,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -50,10 +54,13 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import com.soopeach.nudgee.client.NudgeeColors
 import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.domain.reminder.AuthenticationRequiredException
+import com.soopeach.nudgee.client.domain.reminder.ClarificationType
 import com.soopeach.nudgee.client.domain.reminder.ParsedReminderDraft
 import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
 import com.soopeach.nudgee.client.domain.task.Task
+import com.soopeach.nudgee.client.domain.task.TaskRecurrence
 import com.soopeach.nudgee.client.domain.task.TaskRepository
+import com.soopeach.nudgee.client.domain.task.recurrenceLabel
 import com.soopeach.nudgee.client.notifications.DesktopActiveReminderPresenter
 import com.soopeach.nudgee.client.ui.calendar.CalendarScreen
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButton
@@ -62,6 +69,7 @@ import com.soopeach.nudgee.client.ui.designsystem.NudgeeSegmentedControl
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeSurface
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextInput
+import com.soopeach.nudgee.client.ui.designsystem.NudgeeRecurringDeletionDialog
 import com.soopeach.nudgee.client.ui.home.TaskListViewModel
 import com.soopeach.nudgee.client.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
@@ -99,6 +107,8 @@ private enum class DesktopReminderInputMode(val label: String) {
     NaturalLanguage("Natural language"),
     Manual("Set manually"),
 }
+
+private enum class DesktopManualFocusTarget { Time, Recurrence }
 
 private data class DesktopShellUiState(
     val destination: DesktopDestination = DesktopDestination.Home,
@@ -172,13 +182,17 @@ actual fun AuthenticatedNudgeeScreen(
                     tasks = taskState.tasks,
                     contentPadding = PaddingValues(28.dp),
                     onToggleTask = store::toggleTask,
-                    onDeleteTask = store::deleteTask,
+                    onDeleteTask = { task -> shellViewModel.update { it.copy(taskPendingDeletion = task) } },
                     onUpdateTask = store::updateTask,
                 )
                 DesktopDestination.Settings -> SettingsScreen(
                     email = email,
                     avatarUrl = avatarUrl,
                     onSignOut = onSignOut,
+                    tasks = taskState.tasks,
+                    onUpdateRecurringReminder = store::updateTask,
+                    onSkipRecurringOccurrence = store::skipRecurringOccurrence,
+                    onStopRecurringReminder = store::stopRecurringReminder,
                     contentPadding = PaddingValues(28.dp),
                 )
             }
@@ -189,8 +203,8 @@ actual fun AuthenticatedNudgeeScreen(
         DesktopTaskComposerDialog(
             parser = reminderParser,
             onDismiss = { shellViewModel.update { it.copy(isComposerVisible = false) } },
-            onAddTask = { title, notifyAt ->
-                store.addTask(title, notifyAt)
+            onAddTask = { title, notifyAt, recurrenceRule ->
+                store.addTask(title, notifyAt, recurrenceRule)
                 shellViewModel.update { it.copy(isComposerVisible = false) }
             },
         )
@@ -200,22 +214,37 @@ actual fun AuthenticatedNudgeeScreen(
         DesktopTaskEditDialog(
             task = task,
             onDismiss = { shellViewModel.update { it.copy(taskBeingEdited = null) } },
-            onSave = { title, notifyAt ->
-                store.updateTask(task, title, notifyAt)
+            onSave = { title, notifyAt, recurrenceRule ->
+                store.updateTask(task, title, notifyAt, recurrenceRule)
                 shellViewModel.update { it.copy(taskBeingEdited = null) }
             },
         )
     }
 
     shellState.taskPendingDeletion?.let { task ->
-        DesktopDeleteConfirmationDialog(
-            task = task,
-            onDismiss = { shellViewModel.update { it.copy(taskPendingDeletion = null) } },
-            onConfirm = {
-                store.deleteTask(task)
-                shellViewModel.update { it.copy(taskPendingDeletion = null) }
-            },
-        )
+        if (task.recurrenceRule != null) {
+            NudgeeRecurringDeletionDialog(
+                taskTitle = task.title,
+                onDismiss = { shellViewModel.update { it.copy(taskPendingDeletion = null) } },
+                onDeleteOccurrence = {
+                    store.skipRecurringOccurrence(task)
+                    shellViewModel.update { it.copy(taskPendingDeletion = null) }
+                },
+                onStopFutureReminders = {
+                    store.stopRecurringReminder(task)
+                    shellViewModel.update { it.copy(taskPendingDeletion = null) }
+                },
+            )
+        } else {
+            DesktopDeleteConfirmationDialog(
+                task = task,
+                onDismiss = { shellViewModel.update { it.copy(taskPendingDeletion = null) } },
+                onConfirm = {
+                    store.deleteTask(task)
+                    shellViewModel.update { it.copy(taskPendingDeletion = null) }
+                },
+            )
+        }
     }
 }
 
@@ -396,7 +425,7 @@ private fun DesktopTaskRow(task: Task, onToggleTask: () -> Unit, onEditTask: () 
                     color = if (task.completed) NudgeeColors.mutedInk else NudgeeColors.ink,
                     textDecoration = if (task.completed) TextDecoration.LineThrough else TextDecoration.None,
                 )
-                Text(task.desktopReminderLabel(), style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+                Text(listOfNotNull(task.desktopReminderLabel(), task.recurrenceLabel()).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
             }
             NudgeeTextButton(label = if (task.completed) "Reopen" else "Complete", onClick = onToggleTask)
             NudgeeTextButton(label = "Edit", onClick = onEditTask)
@@ -444,18 +473,21 @@ private fun DesktopEmptyState(
 private fun DesktopTaskComposerDialog(
     parser: SupabaseEdgeFunctionReminderParser?,
     onDismiss: () -> Unit,
-    onAddTask: (String, String) -> Unit,
+    onAddTask: (String, String, String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var mode by remember { mutableStateOf(DesktopReminderInputMode.NaturalLanguage) }
     var naturalLanguage by remember { mutableStateOf("") }
     var parsedReminder by remember { mutableStateOf<ParsedReminderDraft?>(null) }
+    var clarificationDraft by remember { mutableStateOf<ParsedReminderDraft?>(null) }
     var parserMessage by remember { mutableStateOf<String?>(null) }
     var isUnderstanding by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(defaultDesktopDate()) }
     var time by remember { mutableStateOf(defaultDesktopTime()) }
+    var recurrence by remember { mutableStateOf(TaskRecurrence.DoesNotRepeat) }
     var manualError by remember { mutableStateOf<String?>(null) }
+    var manualFocusTarget by remember { mutableStateOf<DesktopManualFocusTarget?>(null) }
 
     Dialog(
         onDismissRequest = { if (!isUnderstanding) onDismiss() },
@@ -476,7 +508,12 @@ private fun DesktopTaskComposerDialog(
                         Text("Tell Nudgee naturally", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
                         NudgeeTextInput(
                             value = naturalLanguage,
-                            onValueChange = { naturalLanguage = it; parserMessage = null; parsedReminder = null },
+                            onValueChange = {
+                                naturalLanguage = it
+                                parserMessage = null
+                                parsedReminder = null
+                                clarificationDraft = null
+                            },
                             placeholder = "e.g. Remind me to buy eggs in 1 hour",
                             minLines = 3,
                             modifier = Modifier.fillMaxWidth(),
@@ -490,10 +527,12 @@ private fun DesktopTaskComposerDialog(
                                     scope.launch {
                                         isUnderstanding = true
                                         parserMessage = null
+                                        parsedReminder = null
+                                        clarificationDraft = null
                                         runCatching { parser.parse(naturalLanguage) }
                                             .onSuccess { draft ->
                                                 if (draft.needsClarification || draft.notifyAt == null) {
-                                                    parserMessage = draft.clarification ?: "When should I remind you?"
+                                                    clarificationDraft = draft
                                                 } else {
                                                     parsedReminder = draft
                                                 }
@@ -517,10 +556,13 @@ private fun DesktopTaskComposerDialog(
                         title = title,
                         date = date,
                         time = time,
+                        recurrence = recurrence,
+                        focusTarget = manualFocusTarget,
                         error = manualError,
                         onTitleChange = { title = it; manualError = null },
                         onDateChange = { date = it; manualError = null },
-                        onTimeChange = { time = it; manualError = null },
+                        onTimeChange = { time = it; manualError = null; manualFocusTarget = null },
+                        onRecurrenceChange = { recurrence = it; manualFocusTarget = null },
                     )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -530,7 +572,7 @@ private fun DesktopTaskComposerDialog(
                             label = "Add task",
                             onClick = {
                                 desktopReminderInstant(date, time)
-                                    .onSuccess { onAddTask(title.trim(), it) }
+                                    .onSuccess { onAddTask(title.trim(), it, recurrence.rule) }
                                     .onFailure { manualError = it.message ?: "Enter a valid future date and time." }
                             },
                             modifier = Modifier.weight(1f),
@@ -551,23 +593,49 @@ private fun DesktopTaskComposerDialog(
                     title = draft.title
                     date = details.date
                     time = details.time
+                    recurrence = TaskRecurrence.fromRule(draft.recurrenceRule)
+                    manualFocusTarget = null
                     manualError = null
                     mode = DesktopReminderInputMode.Manual
                     parsedReminder = null
                 }.onFailure { error -> parserMessage = error.message ?: "Nudgee could not prepare the reminder details." }
             },
-            onConfirm = { onAddTask(draft.title, requireNotNull(draft.notifyAt)); parsedReminder = null },
+            onConfirm = { onAddTask(draft.title, requireNotNull(draft.notifyAt), draft.recurrenceRule); parsedReminder = null },
+        )
+    }
+    clarificationDraft?.let { draft ->
+        DesktopReminderClarificationDialog(
+            draft = draft,
+            onKeepEditing = { clarificationDraft = null },
+            onSetManually = {
+                val details = draft.notifyAt?.let { draft.toDesktopManualDetails().getOrNull() }
+                title = draft.title
+                details?.let {
+                    date = it.date
+                    time = it.time
+                }
+                recurrence = TaskRecurrence.fromRule(draft.recurrenceRule)
+                manualFocusTarget = when (draft.clarificationType) {
+                    ClarificationType.Time -> DesktopManualFocusTarget.Time
+                    ClarificationType.Recurrence -> DesktopManualFocusTarget.Recurrence
+                    null -> null
+                }
+                manualError = null
+                mode = DesktopReminderInputMode.Manual
+                clarificationDraft = null
+            },
         )
     }
     if (isUnderstanding) DesktopUnderstandingReminderDialog(naturalLanguage)
 }
 
 @Composable
-private fun DesktopTaskEditDialog(task: Task, onDismiss: () -> Unit, onSave: (String, String) -> Unit) {
+private fun DesktopTaskEditDialog(task: Task, onDismiss: () -> Unit, onSave: (String, String, String?) -> Unit) {
     val local = Instant.parse(task.notifyAt).toLocalDateTime(TimeZone.currentSystemDefault())
     var title by remember(task.id) { mutableStateOf(task.title) }
     var date by remember(task.id) { mutableStateOf(local.date.toString()) }
     var time by remember(task.id) { mutableStateOf(local.time.toString().take(5)) }
+    var recurrence by remember(task.id) { mutableStateOf(TaskRecurrence.fromRule(task.recurrenceRule)) }
     var error by remember { mutableStateOf<String?>(null) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -579,10 +647,13 @@ private fun DesktopTaskEditDialog(task: Task, onDismiss: () -> Unit, onSave: (St
                     title = title,
                     date = date,
                     time = time,
+                    recurrence = recurrence,
+                    focusTarget = null,
                     error = error,
                     onTitleChange = { title = it; error = null },
                     onDateChange = { date = it; error = null },
                     onTimeChange = { time = it; error = null },
+                    onRecurrenceChange = { recurrence = it },
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     NudgeeButton("Cancel", onDismiss, Modifier.weight(1f), style = NudgeeButtonStyle.Secondary)
@@ -590,7 +661,7 @@ private fun DesktopTaskEditDialog(task: Task, onDismiss: () -> Unit, onSave: (St
                         label = "Save changes",
                         onClick = {
                             desktopReminderInstant(date, time)
-                                .onSuccess { onSave(title.trim(), it) }
+                                .onSuccess { onSave(title.trim(), it, recurrence.rule) }
                                 .onFailure { error = it.message ?: "Enter a valid future date and time." }
                         },
                         modifier = Modifier.weight(1f),
@@ -623,16 +694,56 @@ private fun DesktopManualTaskFields(
     title: String,
     date: String,
     time: String,
+    recurrence: TaskRecurrence,
+    focusTarget: DesktopManualFocusTarget?,
     error: String?,
     onTitleChange: (String) -> Unit,
     onDateChange: (String) -> Unit,
     onTimeChange: (String) -> Unit,
+    onRecurrenceChange: (TaskRecurrence) -> Unit,
 ) {
+    val timeFocusRequester = remember { FocusRequester() }
+    val recurrenceFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(focusTarget) {
+        when (focusTarget) {
+            DesktopManualFocusTarget.Time -> timeFocusRequester.requestFocus()
+            DesktopManualFocusTarget.Recurrence -> recurrenceFocusRequester.requestFocus()
+            null -> Unit
+        }
+    }
     NudgeeTextInput(value = title, onValueChange = onTitleChange, placeholder = "Task title", modifier = Modifier.fillMaxWidth())
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         NudgeeTextInput(value = date, onValueChange = onDateChange, placeholder = "YYYY-MM-DD", modifier = Modifier.weight(1.35f))
-        NudgeeTextInput(value = time, onValueChange = onTimeChange, placeholder = "HH:MM", modifier = Modifier.weight(1f))
+        NudgeeTextInput(value = time, onValueChange = onTimeChange, placeholder = "HH:MM", modifier = Modifier.weight(1f).focusRequester(timeFocusRequester))
     }
+    Spacer(Modifier.height(12.dp))
+    Text("Does it repeat?", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
+    Spacer(Modifier.height(7.dp))
+    NudgeeSegmentedControl(
+        options = TaskRecurrence.entries.map(TaskRecurrence::label),
+        selectedIndex = recurrence.ordinal,
+        onOptionSelected = { onRecurrenceChange(TaskRecurrence.entries[it]) },
+        modifier = Modifier
+            .focusRequester(recurrenceFocusRequester)
+            .focusable()
+            .then(
+                if (focusTarget == DesktopManualFocusTarget.Recurrence) {
+                    Modifier.border(2.dp, NudgeeColors.periwinkle, RoundedCornerShape(22.dp)).padding(2.dp)
+                } else {
+                    Modifier
+                },
+            ),
+        selectedColor = NudgeeColors.mint.copy(alpha = 0.56f),
+    )
+    Text(
+        if (recurrence == TaskRecurrence.DoesNotRepeat) {
+            "This is a one-time nudge."
+        } else {
+            "After this reminder is delivered, Nudgee automatically creates and schedules the next task — even if you do not complete this one."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = NudgeeColors.mutedInk,
+    )
     error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk) }
 }
 
@@ -655,10 +766,72 @@ private fun DesktopNaturalReminderConfirmationDialog(
                     fontWeight = FontWeight.Bold,
                     color = NudgeeColors.lavender,
                 )
+                draft.recurrenceRule?.let { rule ->
+                    Text(TaskRecurrence.fromRule(rule).label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = NudgeeColors.mutedInk)
+                    Text(
+                        "After this reminder is delivered, Nudgee automatically creates and schedules the next task — even if you do not complete this one.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NudgeeColors.mutedInk,
+                    )
+                }
                 Text("You can fine-tune the details before saving.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     NudgeeButton("Edit details", onEditDetails, Modifier.weight(1f), style = NudgeeButtonStyle.Secondary)
                     NudgeeButton("Schedule", onConfirm, Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesktopReminderClarificationDialog(
+    draft: ParsedReminderDraft,
+    onKeepEditing: () -> Unit,
+    onSetManually: () -> Unit,
+) {
+    val isRecurrenceClarification = draft.clarificationType == ClarificationType.Recurrence
+    Dialog(onDismissRequest = onKeepEditing) {
+        NudgeeSurface(modifier = Modifier.width(430.dp), shape = RoundedCornerShape(28.dp)) {
+            Column(Modifier.padding(26.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(
+                    modifier = Modifier.size(44.dp).background(NudgeeColors.mint.copy(alpha = 0.5f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
+                }
+                Text(
+                    if (isRecurrenceClarification) "Choose a repeat pattern" else "One more detail",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = NudgeeColors.ink,
+                )
+                Text(
+                    draft.clarification ?: "When should I remind you?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NudgeeColors.mutedInk,
+                )
+                Text(
+                    if (isRecurrenceClarification) {
+                        "You can choose one of Nudgee’s supported repeat patterns below."
+                    } else {
+                        "Add a date or time, then Nudgee can schedule it."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NudgeeColors.mutedInk,
+                )
+                Text(
+                    "This request already used one AI credit. Continue manually to finish it without using another.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NudgeeColors.mutedInk,
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NudgeeButton("Not now", onKeepEditing, Modifier.weight(1f), style = NudgeeButtonStyle.Secondary)
+                    NudgeeButton(
+                        if (isRecurrenceClarification) "Choose repeat" else "Set reminder time",
+                        onSetManually,
+                        Modifier.weight(1f),
+                    )
                 }
             }
         }

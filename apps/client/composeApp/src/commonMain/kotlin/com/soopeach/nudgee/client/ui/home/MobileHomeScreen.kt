@@ -1,8 +1,10 @@
 package com.soopeach.nudgee.client.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +36,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -46,6 +49,8 @@ import kotlinx.coroutines.flow.update
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -60,6 +65,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.soopeach.nudgee.client.NudgeeColors
 import com.soopeach.nudgee.client.data.supabase.NudgeeSupabase
 import com.soopeach.nudgee.client.domain.reminder.AuthenticationRequiredException
+import com.soopeach.nudgee.client.domain.reminder.ClarificationType
 import com.soopeach.nudgee.client.domain.reminder.DailyParseLimitReachedException
 import com.soopeach.nudgee.client.domain.reminder.NaturalLanguageReminderParser
 import com.soopeach.nudgee.client.domain.reminder.ParsedReminderDraft
@@ -67,14 +73,20 @@ import com.soopeach.nudgee.client.domain.reminder.ReminderParseRequestException
 import com.soopeach.nudgee.client.domain.reminder.ReminderParseUsage
 import com.soopeach.nudgee.client.domain.reminder.SupabaseEdgeFunctionReminderParser
 import com.soopeach.nudgee.client.domain.task.Task
+import com.soopeach.nudgee.client.domain.task.TaskRecurrence
 import com.soopeach.nudgee.client.domain.task.TaskRepository
+import com.soopeach.nudgee.client.domain.task.recurrenceLabel
 import com.soopeach.nudgee.client.ui.calendar.CalendarScreen
+import com.soopeach.nudgee.client.ui.calendar.CalendarTaskDetailSheet
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeButtonStyle
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeDeleteConfirmationDialog
+import com.soopeach.nudgee.client.ui.designsystem.NudgeeRecurringDeletionDialog
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeSegmentedControl
+import com.soopeach.nudgee.client.ui.designsystem.NudgeeSurface
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextButton
 import com.soopeach.nudgee.client.ui.designsystem.NudgeeTextInput
+import com.soopeach.nudgee.client.ui.feedback.rememberPlatformToast
 import com.soopeach.nudgee.client.ui.navigation.NudgeeBottomNavigation
 import com.soopeach.nudgee.client.ui.navigation.NudgeeDestination
 import com.soopeach.nudgee.client.ui.settings.SettingsScreen
@@ -83,6 +95,7 @@ import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
@@ -106,6 +119,8 @@ private data class HomeUiState(
     val destination: NudgeeDestination = NudgeeDestination.Home,
     val isQuickAddVisible: Boolean = false,
     val taskPendingDeletion: Task? = null,
+    val taskInDetail: Task? = null,
+    val feedbackMessage: String? = null,
 )
 
 private class HomeViewModel : ViewModel() {
@@ -126,8 +141,12 @@ private data class QuickAddUiState(
     val manualTitle: String = "",
     val manualDate: String = defaultManualDate(),
     val manualTime: String = defaultManualTime(),
+    val manualRecurrence: TaskRecurrence = TaskRecurrence.DoesNotRepeat,
+    val manualFocusTarget: ManualFocusTarget? = null,
     val manualError: String? = null,
 )
+
+private enum class ManualFocusTarget { Time, Recurrence }
 
 /** Keeps the add-task draft alive across recompositions and owns parser work. */
 private class QuickAddViewModel(
@@ -153,8 +172,9 @@ private class QuickAddViewModel(
     }
 
     fun updateManualTitle(value: String) = update { it.copy(manualTitle = value, manualError = null) }
-    fun updateManualDate(value: String) = update { it.copy(manualDate = value, manualError = null) }
-    fun updateManualTime(value: String) = update { it.copy(manualTime = value, manualError = null) }
+    fun updateManualDate(value: String) = update { it.copy(manualDate = value, manualError = null, manualFocusTarget = null) }
+    fun updateManualTime(value: String) = update { it.copy(manualTime = value, manualError = null, manualFocusTarget = null) }
+    fun updateManualRecurrence(value: TaskRecurrence) = update { it.copy(manualRecurrence = value, manualFocusTarget = null) }
     fun dismissParsedReminder() = update { it.copy(parsedReminder = null) }
     fun dismissClarification() = update { current ->
         current.copy(
@@ -230,6 +250,8 @@ private class QuickAddViewModel(
                         manualTitle = draft.title,
                         manualDate = details.date,
                         manualTime = details.time,
+                        manualRecurrence = TaskRecurrence.fromRule(draft.recurrenceRule),
+                        manualFocusTarget = null,
                         manualError = null,
                         parsedReminder = null,
                     )
@@ -251,6 +273,12 @@ private class QuickAddViewModel(
             it.copy(
                 mode = ReminderInputMode.Manual,
                 manualTitle = draft.title,
+                manualRecurrence = TaskRecurrence.fromRule(draft.recurrenceRule),
+                manualFocusTarget = when (draft.clarificationType) {
+                    ClarificationType.Time -> ManualFocusTarget.Time
+                    ClarificationType.Recurrence -> ManualFocusTarget.Recurrence
+                    null -> null
+                },
                 manualError = null,
                 clarificationDraft = null,
                 inlineClarificationMessage = null,
@@ -258,10 +286,10 @@ private class QuickAddViewModel(
         }
     }
 
-    fun validateManualReminder(onValid: (title: String, notifyAt: String) -> Unit) {
+    fun validateManualReminder(onValid: (title: String, notifyAt: String, recurrenceRule: String?) -> Unit) {
         val current = state.value
         manualReminderInstant(current.manualDate, current.manualTime)
-            .onSuccess { onValid(current.manualTitle.trim(), it) }
+            .onSuccess { onValid(current.manualTitle.trim(), it, current.manualRecurrence.rule) }
             .onFailure { error -> update { it.copy(manualError = error.message) } }
     }
 
@@ -296,7 +324,18 @@ fun MobileHomeScreen(
     }
     val homeState by homeViewModel.state.collectAsState()
     val taskState by store.state.collectAsState()
+    val showPlatformToast = rememberPlatformToast()
     val tasks = taskState.tasks
+
+    LaunchedEffect(homeState.feedbackMessage) {
+        homeState.feedbackMessage?.let { message ->
+            showPlatformToast(message)
+            homeViewModel.update { it.copy(feedbackMessage = null) }
+        }
+    }
+    LaunchedEffect(taskState.error) {
+        taskState.error?.let(showPlatformToast)
+    }
 
     val todayTasks = tasks.filter(Task::isDueToday)
     val todayIncompleteCount = todayTasks.count { !it.completed }
@@ -384,6 +423,7 @@ fun MobileHomeScreen(
                         if (checked != task.completed) store.toggleTask(task)
                     },
                     onDelete = { task -> homeViewModel.update { it.copy(taskPendingDeletion = task) } },
+                    onSelect = { task -> homeViewModel.update { it.copy(taskInDetail = task) } },
                 )
             }
         } else {
@@ -392,13 +432,17 @@ fun MobileHomeScreen(
                     tasks = tasks,
                     contentPadding = contentPadding,
                     onToggleTask = store::toggleTask,
-                    onDeleteTask = store::deleteTask,
+                    onDeleteTask = { task -> homeViewModel.update { it.copy(taskPendingDeletion = task) } },
                     onUpdateTask = store::updateTask,
                 )
                 NudgeeDestination.Settings -> SettingsScreen(
                     email = email,
                     avatarUrl = avatarUrl,
                     onSignOut = onSignOut,
+                    tasks = tasks,
+                    onUpdateRecurringReminder = store::updateTask,
+                    onSkipRecurringOccurrence = store::skipRecurringOccurrence,
+                    onStopRecurringReminder = store::stopRecurringReminder,
                     contentPadding = contentPadding,
                 )
                 NudgeeDestination.Home -> Unit
@@ -413,8 +457,18 @@ fun MobileHomeScreen(
                 quickAddViewModel.reset()
                 homeViewModel.update { it.copy(isQuickAddVisible = false) }
             },
-            onAdd = { title, notifyAt ->
-                store.addTask(title, notifyAt)
+            onAdd = { title, notifyAt, recurrenceRule ->
+                store.addTask(title, notifyAt, recurrenceRule) {
+                    homeViewModel.update {
+                        it.copy(
+                            feedbackMessage = if (recurrenceRule == null) {
+                                "Nudge scheduled."
+                            } else {
+                                "Repeating nudge scheduled. The next reminder is created when this one is sent."
+                            },
+                        )
+                    }
+                }
                 quickAddViewModel.reset()
                 homeViewModel.update {
                     it.copy(
@@ -428,12 +482,60 @@ fun MobileHomeScreen(
     }
 
     homeState.taskPendingDeletion?.let { task ->
-        NudgeeDeleteConfirmationDialog(
-            taskTitle = task.title,
-            onDismiss = { homeViewModel.update { it.copy(taskPendingDeletion = null) } },
-            onConfirm = {
-                store.deleteTask(task)
-                homeViewModel.update { it.copy(taskPendingDeletion = null) }
+        if (task.recurrenceRule != null) {
+            NudgeeRecurringDeletionDialog(
+                taskTitle = task.title,
+                onDismiss = { homeViewModel.update { it.copy(taskPendingDeletion = null) } },
+                onDeleteOccurrence = {
+                    store.skipRecurringOccurrence(task) {
+                        homeViewModel.update {
+                            it.copy(feedbackMessage = "This occurrence was skipped. The next reminder stays scheduled.")
+                        }
+                    }
+                    homeViewModel.update { it.copy(taskPendingDeletion = null) }
+                },
+                onStopFutureReminders = {
+                    store.stopRecurringReminder(task) {
+                        homeViewModel.update { it.copy(feedbackMessage = "Future repeating reminders stopped.") }
+                    }
+                    homeViewModel.update { it.copy(taskPendingDeletion = null) }
+                },
+            )
+        } else {
+            NudgeeDeleteConfirmationDialog(
+                taskTitle = task.title,
+                onDismiss = { homeViewModel.update { it.copy(taskPendingDeletion = null) } },
+                onConfirm = {
+                    store.deleteTask(task) {
+                        homeViewModel.update { it.copy(feedbackMessage = "Task removed.") }
+                    }
+                    homeViewModel.update { it.copy(taskPendingDeletion = null) }
+                },
+            )
+        }
+    }
+    homeState.taskInDetail?.let { task ->
+        CalendarTaskDetailSheet(
+            task = task,
+            onDismiss = { homeViewModel.update { it.copy(taskInDetail = null) } },
+            onToggleTask = {
+                store.toggleTask(task) {
+                    if (!task.completed && task.recurrenceRule != null) {
+                        homeViewModel.update {
+                            it.copy(feedbackMessage = "Completed. Nudgee keeps the next reminder scheduled.")
+                        }
+                    }
+                }
+                homeViewModel.update { it.copy(taskInDetail = null) }
+            },
+            onDeleteTask = {
+                homeViewModel.update { it.copy(taskInDetail = null, taskPendingDeletion = task) }
+            },
+            onSave = { title, notifyAt, recurrenceRule ->
+                store.updateTask(task, title, notifyAt, recurrenceRule) {
+                    homeViewModel.update { it.copy(feedbackMessage = "Nudge updated.") }
+                }
+                homeViewModel.update { it.copy(taskInDetail = null) }
             },
         )
     }
@@ -526,6 +628,7 @@ private fun TaskListGroup(
     tasks: List<Task>,
     onCheckedChange: (Task, Boolean) -> Unit,
     onDelete: (Task) -> Unit,
+    onSelect: (Task) -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -545,6 +648,7 @@ private fun TaskListGroup(
                     task = task,
                     onCheckedChange = { onCheckedChange(task, it) },
                     onDelete = { onDelete(task) },
+                    onClick = { onSelect(task) },
                 )
             }
         }
@@ -556,9 +660,10 @@ private fun MobileTaskRow(
     task: Task,
     onCheckedChange: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         NudgeeCheckControl(
@@ -575,7 +680,11 @@ private fun MobileTaskRow(
                 textDecoration = if (task.completed) TextDecoration.LineThrough else TextDecoration.None,
             )
             Spacer(Modifier.height(4.dp))
-            Text(task.reminderLabel(), style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+            Text(
+                listOfNotNull(task.reminderLabel(), task.recurrenceLabel()).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = NudgeeColors.mutedInk,
+            )
         }
         Box(
             modifier = Modifier
@@ -700,12 +809,18 @@ private fun EmptyTaskState(status: TaskStatusFilter, window: TaskTimeWindow) {
 private fun QuickAddSheet(
     viewModel: QuickAddViewModel,
     onDismiss: () -> Unit,
-    onAdd: (String, String) -> Unit,
+    onAdd: (String, String, String?) -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val contentScrollState = rememberScrollState()
+    val showPlatformToast = rememberPlatformToast()
+
+    LaunchedEffect(state.manualError) {
+        state.manualError?.let(showPlatformToast)
+    }
 
     ModalBottomSheet(
         onDismissRequest = { if (!state.isUnderstanding) onDismiss() },
@@ -715,7 +830,7 @@ private fun QuickAddSheet(
     ) {
         Column(
             modifier = Modifier
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(contentScrollState)
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 80.dp),
         ) {
@@ -747,13 +862,16 @@ private fun QuickAddSheet(
                             title = state.manualTitle,
                             date = state.manualDate,
                             time = state.manualTime,
-                            error = state.manualError,
+                            recurrence = state.manualRecurrence,
+                            focusTarget = state.manualFocusTarget,
                             onTitleChange = viewModel::updateManualTitle,
                             onDateChange = viewModel::updateManualDate,
                             onTimeChange = viewModel::updateManualTime,
+                            onRecurrenceChange = viewModel::updateManualRecurrence,
                             onAdd = { viewModel.validateManualReminder(onAdd) },
                         )
                     }
+                    state.manualError?.let { ManualReminderErrorToast(it) }
         }
     }
 
@@ -763,7 +881,7 @@ private fun QuickAddSheet(
             onDismiss = viewModel::dismissParsedReminder,
             onEditDetails = viewModel::editParsedDetails,
             onConfirm = {
-                onAdd(draft.title, requireNotNull(draft.notifyAt))
+                onAdd(draft.title, requireNotNull(draft.notifyAt), draft.recurrenceRule)
             },
         )
     }
@@ -771,7 +889,8 @@ private fun QuickAddSheet(
     state.clarificationDraft?.let { draft ->
         ReminderClarificationDialog(
             message = draft.clarification ?: "When should I remind you?",
-            onKeepEditing = viewModel::dismissClarification,
+            clarificationType = draft.clarificationType,
+            onDismiss = viewModel::dismissClarification,
             onSetManually = viewModel::setClarificationDetailsManually,
         )
     }
@@ -851,10 +970,11 @@ private fun ClarificationHintCard(message: String) {
 @Composable
 private fun ReminderClarificationDialog(
     message: String,
-    onKeepEditing: () -> Unit,
+    clarificationType: ClarificationType?,
+    onDismiss: () -> Unit,
     onSetManually: () -> Unit,
 ) {
-    Dialog(onDismissRequest = onKeepEditing) {
+    Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(28.dp),
             colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -872,13 +992,14 @@ private fun ReminderClarificationDialog(
                 ) {
                     Text("?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
                 }
-                Text("One more detail", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
+                Text(if (clarificationType == ClarificationType.Recurrence) "Choose a repeat pattern" else "One more detail", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
                 Text(message, style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
-                Text("Add a date or time, then Nudgee can schedule it.", style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
-                NudgeeButton(label = "Set reminder time", onClick = onSetManually, modifier = Modifier.fillMaxWidth())
+                Text(if (clarificationType == ClarificationType.Recurrence) "You can pick one of Nudgee’s supported repeat patterns below." else "Add a date or time, then Nudgee can schedule it.", style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+                Text("This request already used one AI credit. Continue manually to finish it without using another.", style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+                NudgeeButton(label = if (clarificationType == ClarificationType.Recurrence) "Choose repeat" else "Set reminder time", onClick = onSetManually, modifier = Modifier.fillMaxWidth())
                 NudgeeButton(
-                    label = "Keep editing",
-                    onClick = onKeepEditing,
+                    label = "Not now",
+                    onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
                     style = NudgeeButtonStyle.Secondary,
                 )
@@ -1068,6 +1189,14 @@ private fun NaturalReminderConfirmationDialog(
                 Text("Ready to schedule?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
                 Text(draft.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
                 Text(draft.reservationTimeLabel(), modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(NudgeeColors.lavenderSurface).padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.lavender)
+                draft.recurrenceRule?.let { rule ->
+                    Text(TaskRecurrence.fromRule(rule).label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = NudgeeColors.mutedInk)
+                    Text(
+                        "After this reminder is delivered, Nudgee automatically creates and schedules the next task — even if you do not complete this one.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NudgeeColors.mutedInk,
+                    )
+                }
                 Text("You can fine-tune the details before saving.", style = MaterialTheme.typography.bodyMedium, color = NudgeeColors.mutedInk)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     NudgeeButton(
@@ -1092,12 +1221,23 @@ private fun ManualReminderForm(
     title: String,
     date: String,
     time: String,
-    error: String?,
+    recurrence: TaskRecurrence,
+    focusTarget: ManualFocusTarget?,
     onTitleChange: (String) -> Unit,
     onDateChange: (String) -> Unit,
     onTimeChange: (String) -> Unit,
+    onRecurrenceChange: (TaskRecurrence) -> Unit,
     onAdd: () -> Unit,
 ) {
+    val timeFocusRequester = remember { FocusRequester() }
+    val recurrenceFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(focusTarget) {
+        when (focusTarget) {
+            ManualFocusTarget.Time -> timeFocusRequester.requestFocus()
+            ManualFocusTarget.Recurrence -> recurrenceFocusRequester.requestFocus()
+            null -> Unit
+        }
+    }
     Text("Set every detail", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
     Spacer(Modifier.height(8.dp))
     NudgeeTextInput(
@@ -1107,26 +1247,129 @@ private fun ManualReminderForm(
         placeholder = "Task title",
     )
     Spacer(Modifier.height(12.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        NudgeeTextInput(
-            value = date,
-            onValueChange = onDateChange,
-            modifier = Modifier.weight(1.35f),
-            placeholder = "YYYY-MM-DD",
-        )
-        NudgeeTextInput(
-            value = time,
-            onValueChange = onTimeChange,
-            modifier = Modifier.weight(1f),
-            placeholder = "HH:MM",
-        )
-    }
-    error?.let {
-        Spacer(Modifier.height(8.dp))
-        Text(it, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
-    }
+    ManualScheduleControls(
+        date = date,
+        time = time,
+        timeFocusRequester = timeFocusRequester,
+        onDateChange = onDateChange,
+        onTimeChange = onTimeChange,
+    )
+    Spacer(Modifier.height(16.dp))
+    Text("Does it repeat?", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = NudgeeColors.ink)
+    Spacer(Modifier.height(8.dp))
+    NudgeeSegmentedControl(
+        options = TaskRecurrence.entries.map(TaskRecurrence::label),
+        selectedIndex = recurrence.ordinal,
+        onOptionSelected = { onRecurrenceChange(TaskRecurrence.entries[it]) },
+        modifier = Modifier
+            .focusRequester(recurrenceFocusRequester)
+            .focusable()
+            .then(
+                if (focusTarget == ManualFocusTarget.Recurrence) {
+                    Modifier.border(2.dp, NudgeeColors.periwinkle, RoundedCornerShape(22.dp)).padding(2.dp)
+                } else {
+                    Modifier
+                },
+            ),
+        selectedColor = NudgeeColors.mint.copy(alpha = 0.56f),
+    )
+    Spacer(Modifier.height(7.dp))
+    Text(
+        if (recurrence == TaskRecurrence.DoesNotRepeat) {
+            "This is a one-time nudge."
+        } else {
+            "After this reminder is delivered, Nudgee automatically creates and schedules the next task — even if you do not complete this one."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = NudgeeColors.mutedInk,
+    )
     Spacer(Modifier.height(24.dp))
     AddTaskButton(onClick = onAdd, enabled = title.isNotBlank() && date.isNotBlank() && time.isNotBlank())
+}
+
+@Composable
+private fun ManualReminderErrorToast(message: String) {
+    NudgeeSurface(
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+        shape = RoundedCornerShape(18.dp),
+        containerColor = NudgeeColors.lavenderSurface,
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("Check the reminder time", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
+            Text(message, style = MaterialTheme.typography.bodySmall, color = NudgeeColors.mutedInk)
+        }
+    }
+}
+
+@Composable
+private fun ManualScheduleControls(
+    date: String,
+    time: String,
+    timeFocusRequester: FocusRequester,
+    onDateChange: (String) -> Unit,
+    onTimeChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        NudgeeSurface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), containerColor = NudgeeColors.sky.copy(alpha = 0.24f)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("DATE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.mutedInk)
+                Text(manualDateLabel(date), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
+                val parts = date.split('-').let { listOf(it.getOrElse(0) { "" }, it.getOrElse(1) { "" }, it.getOrElse(2) { "" }) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ScheduleUnitInput("YEAR", parts[0], "YYYY", 4, Modifier.weight(1.35f)) { onDateChange("$it-${parts[1]}-${parts[2]}") }
+                    ScheduleUnitInput("MONTH", parts[1], "MM", 2, Modifier.weight(1f)) { onDateChange("${parts[0]}-$it-${parts[2]}") }
+                    ScheduleUnitInput("DAY", parts[2], "DD", 2, Modifier.weight(1f)) { onDateChange("${parts[0]}-${parts[1]}-$it") }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    NudgeeTextButton("− 1 day", { onDateChange(shiftManualDate(date, -1)) }, color = NudgeeColors.ink)
+                    NudgeeTextButton("+ 1 day", { onDateChange(shiftManualDate(date, 1)) }, color = NudgeeColors.ink)
+                }
+            }
+        }
+        NudgeeSurface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), containerColor = NudgeeColors.lavenderSurface) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("TIME", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.mutedInk)
+                Text(manualTimeLabel(time), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.ink)
+                val parts = time.split(':').let { listOf(it.getOrElse(0) { "" }, it.getOrElse(1) { "" }) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ScheduleUnitInput("HOUR", parts[0], "HH", 2, Modifier.weight(1f).focusRequester(timeFocusRequester)) { onTimeChange("$it:${parts[1]}") }
+                    ScheduleUnitInput("MINUTE", parts[1], "MM", 2, Modifier.weight(1f)) { onTimeChange("${parts[0]}:$it") }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    NudgeeTextButton("− 15 min", {
+                        val shifted = shiftManualSchedule(date, time, -15)
+                        onDateChange(shifted.date)
+                        onTimeChange(shifted.time)
+                    }, color = NudgeeColors.ink)
+                    NudgeeTextButton("+ 15 min", {
+                        val shifted = shiftManualSchedule(date, time, 15)
+                        onDateChange(shifted.date)
+                        onTimeChange(shifted.time)
+                    }, color = NudgeeColors.ink)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleUnitInput(
+    label: String,
+    value: String,
+    placeholder: String,
+    maxLength: Int,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = NudgeeColors.mutedInk)
+        NudgeeTextInput(
+            value = value,
+            onValueChange = { onValueChange(it.filter(Char::isDigit).take(maxLength)) },
+            placeholder = placeholder,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -1152,8 +1395,34 @@ private fun defaultManualTime(): String = Clock.System.now()
     .toString()
     .take(5)
 
+private fun manualDateLabel(value: String): String = runCatching {
+    val date = LocalDate.parse(value)
+    "${date.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${date.dayOfMonth}, ${date.year}"
+}.getOrDefault(value)
+
+private fun manualTimeLabel(value: String): String = runCatching {
+    val local = LocalDateTime.parse("2000-01-01T$value")
+    val hour = (local.hour % 12).takeIf { it != 0 } ?: 12
+    "$hour:${local.minute.toString().padStart(2, '0')} ${if (local.hour < 12) "AM" else "PM"}"
+}.getOrDefault(value)
+
+private fun shiftManualDate(value: String, days: Int): String = runCatching {
+    LocalDate.parse(value).plus(days, DateTimeUnit.DAY).toString()
+}.getOrDefault(value)
+
+private data class ManualSchedule(val date: String, val time: String)
+
+private fun shiftManualSchedule(date: String, time: String, minutes: Int): ManualSchedule = runCatching {
+    val shifted = LocalDateTime.parse("${date}T${time}")
+        .toInstant(TimeZone.currentSystemDefault())
+        .plus(minutes, DateTimeUnit.MINUTE)
+        .toLocalDateTime(TimeZone.currentSystemDefault())
+    ManualSchedule(shifted.date.toString(), shifted.time.toString().take(5))
+}.getOrDefault(ManualSchedule(date, time))
+
 private fun manualReminderInstant(date: String, time: String): Result<String> = runCatching {
-    val notifyAt = LocalDateTime.parse("${date.trim()}T${time.trim()}")
+    val notifyAt = runCatching { LocalDateTime.parse("${date.trim()}T${time.trim()}") }
+        .getOrElse { throw IllegalArgumentException("Enter a complete, valid date and time.") }
         .toInstant(TimeZone.currentSystemDefault())
     require(notifyAt > Clock.System.now()) { "Choose a future date and time." }
     notifyAt.toString()
@@ -1179,6 +1448,9 @@ private fun Throwable.toReminderParserMessage(): String {
 
     if (this is ReminderParseRequestException) {
         val reference = requestId?.let { " Reference: ${it.take(8)}" }.orEmpty()
+        if (message?.contains("already passed today", ignoreCase = true) == true) {
+            return "That time has already passed today. Choose a future time, or add a repeat such as “every day at 10am”.$reference"
+        }
         return "Nudgee couldn’t understand that reminder. Please try again or set it manually.$reference"
     }
 
